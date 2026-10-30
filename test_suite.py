@@ -191,7 +191,7 @@ async def test_fastapi_endpoints():
         # Static SPA serve
         resp = await client.get("/")
         assert resp.status_code == 200, f"SPA root failed: {resp.status_code}"
-        assert "Problem2Project AI" in resp.text, "Index HTML not served properly"
+        assert "ProblemPilot" in resp.text or "Problem2Project" in resp.text, "Index HTML not served properly"
         logger.info("✓ SPA frontend root served successfully")
 
         # Static JS files

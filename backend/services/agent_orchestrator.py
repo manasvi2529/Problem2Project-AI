@@ -1,0 +1,371 @@
+"""
+ProblemPilot AI — Master Autonomous Agent Orchestrator
+Coordinates the complete end-to-end user journey:
+ONE PROMPT → LIVE RESEARCH → PROBLEM VALIDATION → OPPORTUNITY SELECTION →
+PROJECT DESIGN → BUILD → TEST → GITHUB → DEPLOY.
+Supports Autonomous, Guided, and Hybrid execution modes with enforced approval checkpoints.
+"""
+import logging
+from typing import Dict, Any, List, Optional
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+
+from backend.models.user import User
+from backend.models.project import Project, ProjectFile
+from backend.models.research import ResearchSession, ProblemCandidate, ResearchSource
+from backend.models.approval import Approval, WorkflowState
+from backend.services.research_agent import ResearchAgent
+from backend.services.opportunity_engine import OpportunityEngine
+from backend.services.approval_engine import ApprovalEngine
+from backend.services.project_architect import ProjectArchitect
+from backend.services.workspace_builder import WorkspaceBuilder
+from backend.services.ai_teacher import AITeacher
+from backend.services.github_service import GitHubService
+from backend.services.cloud_deployer import CloudDeployer
+
+logger = logging.getLogger(__name__)
+
+
+class AgentOrchestrator:
+    """
+    Master orchestrator executing multi-step agent actions with permission checkpoints.
+    """
+
+    def __init__(self):
+        self.research_agent = ResearchAgent()
+        self.opportunity_engine = OpportunityEngine()
+        self.approval_engine = ApprovalEngine()
+        self.project_architect = ProjectArchitect()
+        self.workspace_builder = WorkspaceBuilder()
+        self.ai_teacher = AITeacher()
+        self.github_service = GitHubService()
+        self.cloud_deployer = CloudDeployer()
+
+    async def execute_prompt_journey(
+        self,
+        db: AsyncSession,
+        user: User,
+        prompt: str,
+    ) -> Dict[str, Any]:
+        """
+        Execute Stage 1 & 2: Research & Opportunity Intelligence from one prompt.
+        """
+        # 1. Create ResearchSession
+        intent = self.research_agent.parse_user_prompt(prompt)
+        session = ResearchSession(
+            owner_id=user.id,
+            query=prompt,
+            domain=intent.get("domain", ""),
+            geography=intent.get("geography", ""),
+            status="searching",
+        )
+        db.add(session)
+        await db.commit()
+        await db.refresh(session)
+
+        # 2. Execute Live Multi-source Research
+        research_data = await self.research_agent.execute_live_research(prompt)
+
+        # 3. Store sources
+        session.status = "analyzing"
+        await db.commit()
+
+        for s in research_data.get("sources", []):
+            source = ResearchSource(
+                session_id=session.id,
+                url=s.get("url", ""),
+                title=s.get("title", ""),
+                publisher=s.get("publisher", ""),
+                snippet=s.get("snippet", ""),
+                full_text=s.get("full_text", ""),
+                relevance_score=s.get("relevance_score", 5.0),
+                reliability=s.get("reliability", "medium"),
+                source_type=s.get("source_type", "web"),
+            )
+            db.add(source)
+
+        await db.commit()
+
+        # 4. Rank and Synthesize 3-5 distinct opportunities
+        ranked_opps = await self.opportunity_engine.rank_and_synthesize_opportunities(research_data)
+
+        candidates = []
+        for i, opp in enumerate(ranked_opps, 1):
+            scores = opp.get("scores", {})
+            prob = ProblemCandidate(
+                session_id=session.id,
+                title=opp.get("title", ""),
+                description=f"{opp.get('summary', '')}\n\nProposed Solution: {opp.get('proposed_solution', '')}",
+                affected_users=opp.get("affected_users", ""),
+                existing_solutions=opp.get("existing_solutions", ""),
+                solution_gaps=opp.get("key_differentiator", ""),
+                evidence_summary=f"Discovered across {len(opp.get('evidence_sources', []))} real-world sources and community discussions.",
+                claim_type="source_backed",
+                scores=scores,
+                overall_score=scores.get("overall_score", 7.5),
+                rank=i,
+                status="evaluated",
+            )
+            db.add(prob)
+            candidates.append(prob)
+
+        session.status = "completed"
+        await db.commit()
+
+        return {
+            "session_id": session.id,
+            "intent": intent,
+            "total_sources": len(research_data.get("sources", [])),
+            "opportunities_found": len(candidates),
+            "opportunities": [c.to_dict() for c in candidates],
+            "operating_mode": user.operating_mode,
+            "next_checkpoint": {
+                "action": "select_opportunity",
+                "message": "Review and select an opportunity to proceed to architectural blueprint generation.",
+            },
+        }
+
+    async def generate_blueprint_stage(
+        self,
+        db: AsyncSession,
+        user: User,
+        project_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Stage 5: Generate Tailored Project Blueprint.
+        """
+        res = await db.execute(select(Project).where(Project.id == project_id, Project.owner_id == user.id))
+        project = res.scalar_one_or_none()
+        if not project:
+            raise ValueError("Project not found")
+
+        blueprint = await self.project_architect.generate_blueprint(project.name, project.description)
+        project.blueprint = blueprint
+        project.tech_stack = blueprint.get("tech_stack", {})
+        project.status = "planning"
+
+        # Advance workflow state
+        wf = await self.approval_engine.get_or_create_workflow(db, project.id, user.id, "project", user.operating_mode)
+        wf.state = "planning"
+        wf.current_step = "project_design"
+        wf.step_data = {"stage": "project_design", "blueprint_ready": True}
+
+        await db.commit()
+        await db.refresh(project)
+
+        # Check approval requirement based on mode
+        approval_needed = (user.operating_mode in ("autonomous", "guided", "hybrid"))
+        approval = None
+        if approval_needed:
+            approval = await self.approval_engine.request_approval(
+                db=db,
+                user_id=user.id,
+                action_type="approve_architecture",
+                project_id=project.id,
+                title=f"Approve Architecture: {project.name}",
+                description="Review system design, database schemas, and API contracts before generating code files.",
+                proposed_action={"blueprint": blueprint},
+            )
+
+        return {
+            "project_id": project.id,
+            "blueprint": blueprint,
+            "approval_required": bool(approval),
+            "approval_id": approval.id if approval else None,
+        }
+
+    async def build_workspace_stage(
+        self,
+        db: AsyncSession,
+        user: User,
+        project_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Stage 6: Generate Code in Isolated Sandbox Workspace.
+        """
+        res = await db.execute(select(Project).where(Project.id == project_id, Project.owner_id == user.id))
+        project = res.scalar_one_or_none()
+        if not project:
+            raise ValueError("Project not found")
+
+        # In Guided mode: show mentor instructions instead of full auto generation
+        if user.operating_mode == "guided":
+            return {
+                "project_id": project.id,
+                "mode": "guided",
+                "mentor_instructions": {
+                    "step_1": "Create index.html using semantic HTML5 and link styles.css.",
+                    "step_2": "Implement FastAPI server in server.py exposing /api/v1/health.",
+                    "step_3": "Add automated test cases in test_suite.py verifying status codes.",
+                },
+                "message": "Guided Mode active: Follow mentor instructions to code modules yourself.",
+            }
+
+        # Autonomous or Hybrid: build files
+        result = await self.workspace_builder.build_and_persist_workspace(
+            db=db,
+            project_id=project.id,
+            project_name=project.name,
+            blueprint=project.blueprint or {},
+        )
+
+        wf = await self.approval_engine.get_or_create_workflow(db, project.id, user.id, "project", user.operating_mode)
+        wf.state = "in_progress"
+        wf.current_step = "build_workspace"
+        project.status = "in_progress"
+        await db.commit()
+
+        return {
+            "project_id": project.id,
+            "workspace_dir": result["workspace_dir"],
+            "files_generated": result["files_written"],
+            "message": f"Successfully generated {result['total_files']} files in isolated workspace.",
+        }
+
+    async def test_workspace_stage(
+        self,
+        db: AsyncSession,
+        user: User,
+        project_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Stage 7: Execute Automated Tests in Sandbox.
+        """
+        res = await db.execute(select(Project).where(Project.id == project_id, Project.owner_id == user.id))
+        project = res.scalar_one_or_none()
+        if not project:
+            raise ValueError("Project not found")
+
+        workspace_dir = self.workspace_builder.get_workspace_dir(project.id, project.name)
+
+        # If files have not been generated yet, automatically build the workspace codebase first
+        server_file = workspace_dir / "server.py"
+        if not server_file.exists():
+            await self.workspace_builder.build_and_persist_workspace(
+                db=db,
+                project_id=project.id,
+                project_name=project.name,
+                blueprint=project.blueprint or {},
+            )
+
+        test_results = await self.workspace_builder.run_workspace_tests(workspace_dir)
+
+        wf = await self.approval_engine.get_or_create_workflow(db, project.id, user.id, "project", user.operating_mode)
+        wf.current_step = "test_verification"
+        if test_results.get("passed"):
+            project.status = "verified"
+            wf.state = "review"
+            wf.current_step = "deployment"
+
+        await db.commit()
+        await db.refresh(project)
+
+        return {
+            "project_id": project.id,
+            "test_results": test_results,
+        }
+
+    async def push_github_stage(
+        self,
+        db: AsyncSession,
+        user: User,
+        project_id: str,
+        token: str,
+        repo_name: Optional[str] = None,
+        private: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Stage 8: Scan for secrets, create repo, and push code to GitHub.
+        """
+        res = await db.execute(select(Project).where(Project.id == project_id, Project.owner_id == user.id))
+        project = res.scalar_one_or_none()
+        if not project:
+            raise ValueError("Project not found")
+
+        workspace_dir = self.workspace_builder.get_workspace_dir(project.id, project.name)
+        target_name = repo_name or project.github_repo_name or project.name.lower().replace(" ", "-")
+
+        # 1. Scan files for exposed secrets
+        files_to_scan = {}
+        for p in workspace_dir.glob("*"):
+            if p.is_file() and not p.name.startswith(".git"):
+                try:
+                    files_to_scan[p.name] = p.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    pass
+
+        secret_findings = self.github_service.scan_files_for_secrets(files_to_scan)
+        if secret_findings:
+            return {
+                "success": False,
+                "error": "Secret scan failed. Exposed credentials detected in project files.",
+                "findings": secret_findings,
+            }
+
+        # 2. Create remote repository
+        repo_res = await self.github_service.create_remote_repository(
+            token=token,
+            repo_name=target_name,
+            description=project.description or f"{project.name} — built with ProblemPilot AI",
+            private=private,
+        )
+        if not repo_res.get("success"):
+            return repo_res
+
+        # 3. Commit and push
+        push_res = await self.github_service.commit_and_push_to_github(
+            workspace_dir=workspace_dir,
+            repo_clone_url=repo_res.get("clone_url") or repo_res.get("repo_url"),
+            token=token,
+        )
+        if not push_res.get("success"):
+            return push_res
+
+        project.github_repo_url = repo_res.get("repo_url")
+        project.github_repo_name = target_name
+        project.github_branch = "main"
+
+        wf = await self.approval_engine.get_or_create_workflow(db, project.id, user.id, "project", user.operating_mode)
+        wf.current_step = "github_sync"
+        await db.commit()
+
+        return {
+            "success": True,
+            "repo_url": repo_res.get("repo_url"),
+            "full_name": repo_res.get("full_name"),
+            "branch": "main",
+            "message": "Project verified and pushed to remote GitHub repository.",
+        }
+
+    async def deploy_cloud_stage(
+        self,
+        db: AsyncSession,
+        user: User,
+        project_id: str,
+        provider: str = "vercel",
+    ) -> Dict[str, Any]:
+        """
+        Stage 9: Generate Cloud Deployment Manifests and conduct health verification.
+        """
+        res = await db.execute(select(Project).where(Project.id == project_id, Project.owner_id == user.id))
+        project = res.scalar_one_or_none()
+        if not project:
+            raise ValueError("Project not found")
+
+        workspace_dir = self.workspace_builder.get_workspace_dir(project.id, project.name)
+        manifests = self.cloud_deployer.generate_deployment_manifests(workspace_dir, project.name, provider)
+
+        project.deploy_provider = provider
+        project.deploy_status = "configured"
+
+        wf = await self.approval_engine.get_or_create_workflow(db, project.id, user.id, "project", user.operating_mode)
+        wf.current_step = "cloud_deploy"
+        await db.commit()
+
+        return {
+            "project_id": project.id,
+            "provider": provider,
+            "manifests_generated": list(manifests.keys()),
+            "message": f"Cloud deployment manifests configured for {provider.capitalize()}.",
+        }
+

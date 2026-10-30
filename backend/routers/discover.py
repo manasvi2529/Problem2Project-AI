@@ -6,7 +6,7 @@ combined with Data Science analytics (Pandas, Scikit-learn) and AI synthesis.
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -33,14 +33,57 @@ router = APIRouter(prefix="/api/discover", tags=["discover"])
 
 class DiscoverRequest(BaseModel):
     query: str = Field(..., min_length=2, max_length=300)
-    platforms: list[str] = ["reddit", "hackernews", "stackoverflow", "devto"]
-    subreddits: list[str] = []
+    platforms: List[str] = ["reddit", "hackernews", "stackoverflow", "devto"]
+    subreddits: List[str] = []
     domain: str = ""
     geography: str = ""
+
 
 class QuickSearchRequest(BaseModel):
     query: str = Field(..., min_length=2, max_length=300)
     platform: str = "reddit"
+
+
+# ── Helper for Candidate Population ──────────────────────────────────────────
+
+def _populate_candidates_from_ds(db, session_id: str, ds_opportunities: list, source_ids: list, weights: dict):
+    """Populate ProblemCandidate records from quantitative Data Science analytics."""
+    for i, opp in enumerate(ds_opportunities):
+        p_metric = opp.get("metrics", {})
+        p_potential = opp.get("project_potential", {})
+
+        scores = {
+            "severity": {"score": min(10.0, float(p_metric.get("pain_intensity", 5.0))), "explanation": "Calculated via lexical frustration density"},
+            "scale": {"score": min(10.0, float(p_metric.get("engagement_score", 5.0))), "explanation": f"Grounded in {p_metric.get('raw_upvotes', 0)} upvotes and {p_metric.get('raw_comments', 0)} comments"},
+            "evidence_strength": {"score": 8.5, "explanation": f"Directly observed on {opp.get('platform', 'discussion community')}"},
+            "urgency": {"score": min(10.0, float(p_metric.get("urgency_score", 5.0))), "explanation": "Urgency keyword frequency in community discussion"},
+            "feasibility": {"score": round(float(p_potential.get("feasibility_score", 70.0)) / 10.0, 1), "explanation": f"Assessed as {p_potential.get('difficulty', 'Intermediate')} implementation"},
+            "differentiation": {"score": 7.5, "explanation": "Observed gap in current tooling"},
+            "effort": {"score": 7.0 if p_potential.get("difficulty") == "Easy" else 5.0, "explanation": "Estimated engineering complexity"},
+        }
+
+        total_weight = sum(weights.values()) or 1.0
+        overall = sum(scores[dim]["score"] * weights.get(dim, 1.0) for dim in scores if dim in weights) / total_weight
+
+        problem = ProblemCandidate(
+            session_id=session_id,
+            title=opp.get("title", f"Identified Opportunity {i+1}"),
+            description=f"{opp.get('problem_statement', '')}\n\nSuggested Solution: {p_potential.get('suggested_solution', '')}",
+            affected_users=p_potential.get("target_audience", "Developers and technical teams"),
+            existing_solutions="Manual workarounds, spreadsheets, or legacy fragmented tools",
+            solution_gaps="Lacks automation, modern UX, or specialized workflows",
+            evidence_summary=f"Discovered on {opp.get('platform', 'web')} ({opp.get('subreddit') or 'general'}). Source URL: {opp.get('source_url', '')}",
+            claim_type="source_backed",
+            scores=scores,
+            overall_score=round(overall, 2),
+            score_weights=weights,
+            evidence_gaps=["User interviews recommended to confirm pricing tolerance"],
+            contradictions=[],
+            source_ids=source_ids[:20],
+            rank=i + 1,
+            status="evaluated",
+        )
+        db.add(problem)
 
 
 # ── Background Discovery Pipeline ───────────────────────────────────────────
@@ -182,46 +225,12 @@ Return ONLY a valid JSON array of objects with:
                             db.add(problem)
                     except Exception as e:
                         logger.error(f"AI response JSON parse error: {e}. Falling back to Data Science extraction.")
-                        self._populate_candidates_from_ds(db, session_id, ds_opportunities, source_ids, weights)
+                        _populate_candidates_from_ds(db, session_id, ds_opportunities, source_ids, weights)
                 else:
-                    self._populate_candidates_from_ds(db, session_id, ds_opportunities, source_ids, weights)
+                    _populate_candidates_from_ds(db, session_id, ds_opportunities, source_ids, weights)
             else:
                 # Direct Data Science pipeline (deterministic NLP + Pandas)
-                for i, opp in enumerate(ds_opportunities):
-                    p_metric = opp["metrics"]
-                    p_potential = opp["project_potential"]
-
-                    scores = {
-                        "severity": {"score": min(10.0, p_metric["pain_intensity"]), "explanation": "Calculated via lexical frustration density"},
-                        "scale": {"score": min(10.0, p_metric["engagement_score"]), "explanation": f"Grounded in {p_metric['raw_upvotes']} upvotes and {p_metric['raw_comments']} comments"},
-                        "evidence_strength": {"score": 8.5, "explanation": f"Directly observed on {opp['platform']}"},
-                        "urgency": {"score": min(10.0, p_metric["urgency_score"]), "explanation": "Urgency keyword frequency in community discussion"},
-                        "feasibility": {"score": round(p_potential["feasibility_score"] / 10.0, 1), "explanation": f"Assessed as {p_potential['difficulty']} implementation"},
-                        "differentiation": {"score": 7.5, "explanation": "Observed gap in current tooling"},
-                        "effort": {"score": 7.0 if p_potential["difficulty"] == "Easy" else 5.0, "explanation": "Estimated engineering complexity"},
-                    }
-
-                    overall = sum(scores[dim]["score"] * weights.get(dim, 1.0) for dim in scores) / sum(weights.values())
-
-                    problem = ProblemCandidate(
-                        session_id=session_id,
-                        title=opp["title"],
-                        description=f"{opp['problem_statement']}\n\nSuggested Solution: {p_potential['suggested_solution']}",
-                        affected_users=p_potential["target_audience"],
-                        existing_solutions="Manual workarounds, spreadsheets, or legacy fragmented tools",
-                        solution_gaps="Lacks automation, modern UX, or specialized workflows",
-                        evidence_summary=f"Discovered on {opp['platform']} ({opp.get('subreddit') or 'general'}). Source URL: {opp['source_url']}",
-                        claim_type="source_backed",
-                        scores=scores,
-                        overall_score=round(overall, 2),
-                        score_weights=weights,
-                        evidence_gaps=["User interviews recommended to confirm pricing tolerance"],
-                        contradictions=[],
-                        source_ids=source_ids[:20],
-                        rank=i + 1,
-                        status="evaluated",
-                    )
-                    db.add(problem)
+                _populate_candidates_from_ds(db, session_id, ds_opportunities, source_ids, weights)
 
             session.status = "completed"
             session.completed_at = datetime.now(timezone.utc)
@@ -289,12 +298,26 @@ async def get_session_analytics(
     Get Data Science quantitative metrics (Pandas DataFrame summary,
     pain scores, urgency scores, platform breakdown, and cluster categories).
     """
+    # IDOR check: verify ownership
+    sess_check = await db.execute(
+        select(ResearchSession).where(
+            ResearchSession.id == session_id,
+            ResearchSession.owner_id == user.id,
+        )
+    )
+    if not sess_check.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Research session not found")
+
     result = await db.execute(
         select(ResearchSource).where(ResearchSource.session_id == session_id)
     )
     sources = result.scalars().all()
     if not sources:
-        raise HTTPException(status_code=404, detail="No research sources found for this session")
+        return {
+            "session_id": session_id,
+            "statistics": {"total_sources": 0, "avg_pain_intensity": 0, "platforms": {}},
+            "top_data_science_opportunities": [],
+        }
 
     items = []
     for s in sources:
@@ -333,6 +356,16 @@ async def export_session_csv(
     db: AsyncSession = Depends(get_db),
 ):
     """Export retained research items to CSV for data scientists."""
+    # IDOR check: verify ownership
+    sess_check = await db.execute(
+        select(ResearchSession).where(
+            ResearchSession.id == session_id,
+            ResearchSession.owner_id == user.id,
+        )
+    )
+    if not sess_check.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Research session not found")
+
     result = await db.execute(
         select(ResearchSource).where(ResearchSource.session_id == session_id)
     )
@@ -378,60 +411,67 @@ async def quick_platform_search(
 
     try:
         results = await scrapers[platform]()
-        analyzer = DataScienceProblemAnalyzer(results)
-        analyzer.compute_metrics()
-        top_opps = analyzer.get_top_opportunities(top_n=5)
-
         return {
             "platform": platform,
             "query": q,
             "count": len(results),
-            "results": results,
-            "data_science_ranked_opportunities": top_opps,
+            "results": results[:10],
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Scraping {platform} failed: {str(e)}")
+        logger.error(f"Quick search failed on {platform}: {e}")
+        return {
+            "platform": platform,
+            "query": q,
+            "count": 0,
+            "results": [],
+            "error": str(e),
+        }
 
 
 @router.get("/platforms")
-async def list_platforms():
-    """List available platforms for scraping."""
+async def list_available_platforms():
+    """List all supported platform scrapers."""
     return {
         "platforms": [
             {
                 "id": "reddit",
                 "name": "Reddit",
-                "description": "Community discussions, complaints, pain points across r/startups, r/webdev, r/datascience",
-                "auth_required": False,
-                "status": "available",
+                "description": "Scrapes user complaints & pain points from tech/SaaS subreddits via public JSON",
+                "status": "active",
+                "requires_api_key": False,
+                "rate_limit": "60 req/min",
             },
             {
                 "id": "hackernews",
-                "name": "Hacker News",
-                "description": "Startup ideas, Ask HN questions, Show HN critiques, dev pain points",
-                "auth_required": False,
-                "status": "available",
+                "name": "HackerNews",
+                "description": "Scrapes Ask HN and tech discussion threads via Algolia search API",
+                "status": "active",
+                "requires_api_key": False,
+                "rate_limit": "10,000 req/hour",
             },
             {
                 "id": "stackoverflow",
-                "name": "Stack Overflow",
-                "description": "Unanswered developer problems, recurring bugs, architectural challenges",
-                "auth_required": False,
-                "status": "available",
+                "name": "StackOverflow",
+                "description": "Identifies recurring unanswered questions & developer roadblocks via StackExchange API",
+                "status": "active",
+                "requires_api_key": False,
+                "rate_limit": "300 req/day without key",
             },
             {
                 "id": "github_trending",
                 "name": "GitHub Trending",
-                "description": "Fastest growing developer tools, repos, and missing ecosystems",
-                "auth_required": False,
-                "status": "available",
+                "description": "Tracks emerging repositories & technology gaps via daily trending scrapers",
+                "status": "active",
+                "requires_api_key": False,
+                "rate_limit": "HTML scrape",
             },
             {
                 "id": "devto",
                 "name": "Dev.to",
-                "description": "Developer blog posts, tool feedback, and community discussions",
-                "auth_required": False,
-                "status": "available",
+                "description": "Extracts developer tutorials, complaints, and ecosystem discussions via DEV API",
+                "status": "active",
+                "requires_api_key": False,
+                "rate_limit": "Open public API",
             },
-        ],
+        ]
     }

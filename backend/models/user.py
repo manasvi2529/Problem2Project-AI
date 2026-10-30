@@ -39,6 +39,7 @@ class User(Base):
             "email": self.email,
             "username": self.username,
             "full_name": self.full_name,
+            "name": self.full_name or self.username,
             "operating_mode": self.operating_mode,
             "is_active": self.is_active,
             "created_at": self.created_at.isoformat() if self.created_at else None,

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 
 from backend.database import get_db
@@ -27,20 +28,26 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 # ── Schemas ──────────────────────────────────────────────────────────────────
 
 class CreateProjectRequest(BaseModel):
-    name: str = Field(..., min_length=2, max_length=255)
-    problem_id: str = ""
-    description: str = ""
+    name: Optional[str] = None
+    title: Optional[str] = None  # Frontend alias
+    problem_id: Optional[str] = ""
+    problem_candidate_id: Optional[str] = ""  # Frontend alias
+    description: Optional[str] = ""
+    repository_name: Optional[str] = ""
 
 class UpdateProjectRequest(BaseModel):
-    name: str = None
-    description: str = None
-    status: str = None
-    blueprint: dict = None
-    tech_stack: dict = None
-    tasks: list = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+    blueprint: Optional[dict] = None
+    tech_stack: Optional[dict] = None
+    tasks: Optional[list] = None
 
 class GenerateBlueprintRequest(BaseModel):
-    problem_id: str
+    problem_id: Optional[str] = None
+
+class AdvanceWorkflowRequest(BaseModel):
+    target_stage: Optional[str] = None
 
 
 # ── Background Blueprint Generation ─────────────────────────────────────────
@@ -151,25 +158,37 @@ async def create_project(
     user: User = Depends(get_user_from_token),
     db: AsyncSession = Depends(get_db),
 ):
+    project_name = (body.name or body.title or "Untitled Project").strip()
+    if len(project_name) < 2:
+        raise HTTPException(status_code=400, detail="Project name must have at least 2 characters")
+
+    problem_id = (body.problem_id or body.problem_candidate_id or "").strip() or None
+
+    import uuid
+    project_id = str(uuid.uuid4())
     project = Project(
+        id=project_id,
         owner_id=user.id,
-        name=body.name,
-        description=body.description,
-        problem_id=body.problem_id or None,
+        name=project_name,
+        description=body.description or "",
+        problem_id=problem_id,
+        github_repo_name=body.repository_name or "",
+        status="planning",
     )
     db.add(project)
 
     # Create workflow state
     wf = WorkflowState(
-        entity_type="project", entity_id=project.id,
-        owner_id=user.id, state="draft", current_step="created",
+        entity_type="project", entity_id=project_id,
+        owner_id=user.id, state="planning", current_step="opportunity_selected",
         operating_mode=user.operating_mode,
+        step_data={"stage": "opportunity", "stages_completed": ["opportunity"]},
     )
     db.add(wf)
 
     log = AuditLog(
         user_id=user.id, action="create_project", category="project",
-        description=f"Project created: {body.name}", details={"project_id": project.id},
+        description=f"Project created: {project_name}", details={"project_id": project.id},
     )
     db.add(log)
 
@@ -284,6 +303,130 @@ async def generate_blueprint(
     return {
         "message": "Blueprint generation started",
         "project_id": project_id,
+    }
+
+
+@router.get("/{project_id}/state")
+async def get_project_state(
+    project_id: str,
+    user: User = Depends(get_user_from_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retrieve the workflow state for a project."""
+    # Ensure project exists and belongs to user
+    res = await db.execute(select(Project).where(Project.id == project_id, Project.owner_id == user.id))
+    project = res.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    wf_res = await db.execute(
+        select(WorkflowState).where(
+            WorkflowState.entity_type == "project",
+            WorkflowState.entity_id == project_id,
+            WorkflowState.owner_id == user.id,
+        )
+    )
+    wf = wf_res.scalar_one_or_none()
+    if not wf:
+        # Create default workflow state if missing
+        wf = WorkflowState(
+            entity_type="project",
+            entity_id=project_id,
+            owner_id=user.id,
+            state="planning",
+            current_step="opportunity",
+            operating_mode=user.operating_mode,
+            step_data={"stage": "opportunity", "stages_completed": ["opportunity"]},
+        )
+        db.add(wf)
+        await db.commit()
+        await db.refresh(wf)
+
+    return {"workflow": wf.to_dict(), "state": wf.to_dict(), "project_status": project.status}
+
+
+@router.post("/{project_id}/advance")
+async def advance_project_workflow(
+    project_id: str,
+    body: AdvanceWorkflowRequest,
+    user: User = Depends(get_user_from_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """Advance the project workflow through stages (opportunity -> architecture -> plan -> execution -> review)."""
+    res = await db.execute(select(Project).where(Project.id == project_id, Project.owner_id == user.id))
+    project = res.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    wf_res = await db.execute(
+        select(WorkflowState).where(
+            WorkflowState.entity_type == "project",
+            WorkflowState.entity_id == project_id,
+            WorkflowState.owner_id == user.id,
+        )
+    )
+    wf = wf_res.scalar_one_or_none()
+    if not wf:
+        wf = WorkflowState(
+            entity_type="project",
+            entity_id=project_id,
+            owner_id=user.id,
+            state="planning",
+            current_step="opportunity",
+            operating_mode=user.operating_mode,
+            step_data={"stage": "opportunity", "stages_completed": ["opportunity"]},
+        )
+        db.add(wf)
+
+    stages = ["opportunity", "architecture", "plan", "execution", "review"]
+    current_data = wf.step_data or {}
+    current_stage = current_data.get("stage", "opportunity")
+    completed = list(current_data.get("stages_completed", [current_stage]))
+
+    if body.target_stage and body.target_stage in stages:
+        next_stage = body.target_stage
+    else:
+        try:
+            curr_idx = stages.index(current_stage)
+            next_idx = min(curr_idx + 1, len(stages) - 1)
+            next_stage = stages[next_idx]
+        except ValueError:
+            next_stage = "architecture"
+
+    if next_stage not in completed:
+        completed.append(next_stage)
+
+    wf.previous_state = wf.state
+    wf.state = "in_progress" if next_stage in ("execution", "plan") else "planning"
+    wf.current_step = next_stage
+    wf.step_data = {
+        "stage": next_stage,
+        "stages_completed": completed,
+        "advanced_at": datetime.now(timezone.utc).isoformat(),
+    }
+    project.status = wf.state
+    project.updated_at = datetime.now(timezone.utc)
+
+    log = AuditLog(
+        user_id=user.id,
+        project_id=project_id,
+        action="advance_workflow",
+        category="project",
+        description=f"Workflow advanced from {current_stage} to {next_stage}",
+    )
+    db.add(log)
+
+    await db.commit()
+    await db.refresh(wf)
+    await db.refresh(project)
+
+    return {
+        "workflow": wf.to_dict(),
+        "state": wf.to_dict(),
+        "current_stage": next_stage,
+        "stages_completed": completed,
+        "project": project.to_dict(),
+        "message": f"Project advanced to {next_stage} stage",
     }
 
 

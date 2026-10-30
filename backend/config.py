@@ -1,27 +1,37 @@
 """
-Problem2Project AI — Application Configuration
+ProblemPilot AI — Application Configuration
+Unified AI product combining Problem2Project AI and ProblemPilot AI.
 """
 import os
+import secrets
 from pathlib import Path
 from pydantic_settings import BaseSettings
-from typing import Optional
+from typing import Optional, List
+
+
+# Generate fallback secret key if none provided
+_FALLBACK_SECRET = secrets.token_urlsafe(32)
 
 
 class Settings(BaseSettings):
     # Application
-    APP_NAME: str = "Problem2Project AI"
+    APP_NAME: str = "ProblemPilot AI"
     APP_ENV: str = "development"
     DEBUG: bool = True
     HOST: str = "127.0.0.1"
     PORT: int = 8000
 
     # Security
-    SECRET_KEY: str = "CHANGE_ME_GENERATE_A_RANDOM_SECRET_KEY"
+    SECRET_KEY: str = _FALLBACK_SECRET
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
     ALGORITHM: str = "HS256"
-
-    # Database
-    DATABASE_URL: str = ""
+    CORS_ORIGINS: List[str] = [
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://localhost:8501",
+    ]
 
     # AI Provider
     AI_PROVIDER: str = "openrouter"  # openrouter | google | anthropic
@@ -35,14 +45,16 @@ class Settings(BaseSettings):
     SEARCH_API_KEY: Optional[str] = None
     SEARCH_ENGINE_ID: Optional[str] = None
 
-    # GitHub
+    # GitHub Integration
     GITHUB_CLIENT_ID: Optional[str] = None
     GITHUB_CLIENT_SECRET: Optional[str] = None
     GITHUB_REDIRECT_URI: str = "http://localhost:8000/api/integrations/github/callback"
+    GITHUB_PERSONAL_ACCESS_TOKEN: Optional[str] = None
 
-    # Execution
+    # Execution & Isolation
     EXECUTION_TIMEOUT_SECONDS: int = 30
     EXECUTION_MAX_RETRIES: int = 3
+    MAX_MEMORY_MB: int = 512
 
     # Paths
     BASE_DIR: Path = Path(__file__).resolve().parent.parent
@@ -61,24 +73,27 @@ class Settings(BaseSettings):
 
     @property
     def ai_configured(self) -> bool:
-        if self.OPENROUTER_API_KEY and self.OPENROUTER_API_KEY != "your-openrouter-api-key-here":
+        if self.OPENROUTER_API_KEY and self.OPENROUTER_API_KEY not in ("your-openrouter-api-key-here", ""):
             return True
         if self.AI_PROVIDER == "google":
-            return bool(self.GOOGLE_API_KEY and self.GOOGLE_API_KEY != "your-google-api-key-here")
+            return bool(self.GOOGLE_API_KEY and self.GOOGLE_API_KEY not in ("your-google-api-key-here", ""))
         elif self.AI_PROVIDER == "anthropic":
-            return bool(self.ANTHROPIC_API_KEY and self.ANTHROPIC_API_KEY != "your-anthropic-api-key-here")
-        return bool(self.OPENROUTER_API_KEY)
+            return bool(self.ANTHROPIC_API_KEY and self.ANTHROPIC_API_KEY not in ("your-anthropic-api-key-here", ""))
+        return bool(self.OPENROUTER_API_KEY or self.GOOGLE_API_KEY or self.ANTHROPIC_API_KEY)
 
     @property
     def search_configured(self) -> bool:
         return bool(
             self.SEARCH_API_KEY
-            and self.SEARCH_API_KEY != "your-search-api-key-here"
+            and self.SEARCH_API_KEY not in ("your-search-api-key-here", "")
         )
 
     @property
     def github_configured(self) -> bool:
-        return bool(self.GITHUB_CLIENT_ID and self.GITHUB_CLIENT_SECRET)
+        return bool(
+            (self.GITHUB_CLIENT_ID and self.GITHUB_CLIENT_SECRET)
+            or self.GITHUB_PERSONAL_ACCESS_TOKEN
+        )
 
 
 settings = Settings()

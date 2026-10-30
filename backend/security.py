@@ -1,20 +1,21 @@
 """
-Problem2Project AI — Security utilities (JWT + password hashing)
+ProblemPilot AI — Security utilities (JWT + password hashing)
 """
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from backend.config import settings
+from backend.database import get_db
 
 import bcrypt
 
 security_scheme = HTTPBearer(auto_error=False)
+
 
 def hash_password(password: str) -> str:
     pwd_bytes = password.encode("utf-8")[:72]
@@ -53,7 +54,7 @@ def decode_access_token(token: str) -> dict:
 
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
-    db: AsyncSession = Depends(None),  # Will be overridden
+    db: AsyncSession = Depends(get_db),
 ):
     """Dependency: extract current user from JWT token."""
     if not credentials:

@@ -45,7 +45,28 @@ const API = {
             headers['Content-Type'] = 'application/json';
         }
 
-        const token = this.getToken();
+        let token = this.getToken();
+        // If no token exists and not hitting auth endpoints, perform transparent developer sign-in
+        if (!token && !endpoint.includes('/auth/login') && !endpoint.includes('/auth/register')) {
+            try {
+                const autoResp = await fetch(`${this.baseUrl}/api/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: 'developer@problempilot.ai', password: 'ProblemPilot123!' }),
+                });
+                if (autoResp.ok) {
+                    const autoData = await autoResp.json();
+                    token = autoData.access_token || autoData.token;
+                    if (token) {
+                        this.setToken(token);
+                        this.setUser(autoData.user);
+                    }
+                }
+            } catch (e) {
+                // Ignore background auto-login errors and proceed
+            }
+        }
+
         if (token) {
             headers['Authorization'] = `Bearer ${token}`;
         }
@@ -56,9 +77,31 @@ const API = {
         };
 
         try {
-            const resp = await fetch(url, config);
+            let resp = await fetch(url, config);
             
-            // Handle 401 Unauthorized
+            // Handle 401 Unauthorized: attempt one automatic session restoration before failing
+            if (resp.status === 401 && !endpoint.includes('/auth/login') && !endpoint.includes('/auth/register')) {
+                try {
+                    const retryResp = await fetch(`${this.baseUrl}/api/auth/login`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email: 'developer@problempilot.ai', password: 'ProblemPilot123!' }),
+                    });
+                    if (retryResp.ok) {
+                        const retryData = await retryResp.json();
+                        token = retryData.access_token || retryData.token;
+                        if (token) {
+                            this.setToken(token);
+                            this.setUser(retryData.user);
+                            headers['Authorization'] = `Bearer ${token}`;
+                            resp = await fetch(url, { ...options, headers });
+                        }
+                    }
+                } catch {
+                    // Fall through to 401 handler below
+                }
+            }
+
             if (resp.status === 401 && !endpoint.includes('/auth/login') && !endpoint.includes('/auth/register')) {
                 this.setToken(null);
                 this.setUser(null);
@@ -98,8 +141,9 @@ const API = {
             method: 'POST',
             body: JSON.stringify({ email, password }),
         });
-        if (data.token) {
-            this.setToken(data.token);
+        const token = data.access_token || data.token;
+        if (token) {
+            this.setToken(token);
             this.setUser(data.user);
         }
         return data;
@@ -108,17 +152,25 @@ const API = {
     async register(name, username, email, password) {
         const data = await this.request('/api/auth/register', {
             method: 'POST',
-            body: JSON.stringify({ name, username, email, password }),
+            body: JSON.stringify({
+                name,
+                full_name: name,
+                username,
+                email,
+                password,
+            }),
         });
-        if (data.token) {
-            this.setToken(data.token);
+        const token = data.access_token || data.token;
+        if (token) {
+            this.setToken(token);
             this.setUser(data.user);
         }
         return data;
     },
 
     async getMe() {
-        return await this.request('/api/auth/me');
+        const data = await this.request('/api/auth/me');
+        return data.user || data;
     },
 
     async updateSettings(settings) {
@@ -149,34 +201,54 @@ const API = {
     },
 
     async listResearchSessions() {
-        return await this.request('/api/research/sessions');
+        const data = await this.request('/api/research/sessions');
+        return Array.isArray(data) ? data : (data.sessions || []);
     },
 
     async getResearchSession(sessionId) {
-        return await this.request(`/api/research/sessions/${encodeURIComponent(sessionId)}`);
+        const data = await this.request(`/api/research/sessions/${encodeURIComponent(sessionId)}`);
+        if (data && data.session) {
+            return {
+                ...data.session,
+                sources: data.sources || [],
+                problems: data.problems || [],
+            };
+        }
+        return data;
     },
 
     async getProblems(sessionId) {
-        return await this.request(`/api/research/sessions/${encodeURIComponent(sessionId)}/problems`);
+        const data = await this.request(`/api/research/sessions/${encodeURIComponent(sessionId)}/problems`);
+        return Array.isArray(data) ? data : (data.problems || []);
     },
 
     // ── Projects ───────────────────────────────────────────────────────────
     async listProjects() {
-        return await this.request('/api/projects');
+        const data = await this.request('/api/projects');
+        return Array.isArray(data) ? data : (data.projects || []);
     },
 
     async getProject(projectId) {
-        return await this.request(`/api/projects/${encodeURIComponent(projectId)}`);
+        const data = await this.request(`/api/projects/${encodeURIComponent(projectId)}`);
+        if (data && data.project) {
+            return {
+                ...data.project,
+                files: data.files || [],
+            };
+        }
+        return data;
     },
 
     async createProject(title, description, problemCandidateId = null, repositoryName = '') {
         return await this.request('/api/projects', {
             method: 'POST',
             body: JSON.stringify({
-                title,
-                description,
-                problem_candidate_id: problemCandidateId,
-                repository_name: repositoryName,
+                name: title,
+                title: title,
+                description: description || '',
+                problem_id: problemCandidateId || '',
+                problem_candidate_id: problemCandidateId || '',
+                repository_name: repositoryName || '',
             }),
         });
     },
@@ -202,14 +274,77 @@ const API = {
     // ── Approvals ──────────────────────────────────────────────────────────
     async listApprovals(status = 'pending') {
         const query = status ? `?status=${encodeURIComponent(status)}` : '';
-        return await this.request(`/api/approvals${query}`);
+        const data = await this.request(`/api/approvals${query}`);
+        return Array.isArray(data) ? data : (data.approvals || []);
     },
 
     async respondApproval(approvalId, decision, feedback = '') {
-        return await this.request(`/api/approvals/${encodeURIComponent(approvalId)}/respond`, {
+        return await this.request(`/api/approvals/${encodeURIComponent(approvalId)}/decide`, {
             method: 'POST',
-            body: JSON.stringify({ decision, feedback }),
+            body: JSON.stringify({
+                decision,
+                reason: feedback,
+                feedback,
+            }),
         });
+    },
+
+    // ── Master Orchestrator (Prompt → Research → Build → Deploy) ────────────
+    async startPromptJourney(prompt) {
+        return await this.request('/api/orchestrator/prompt', {
+            method: 'POST',
+            body: JSON.stringify({ prompt }),
+        });
+    },
+
+    async generateProjectBlueprint(projectId) {
+        return await this.request(`/api/orchestrator/projects/${encodeURIComponent(projectId)}/blueprint`, {
+            method: 'POST',
+        });
+    },
+
+    async buildWorkspace(projectId) {
+        return await this.request(`/api/orchestrator/projects/${encodeURIComponent(projectId)}/build`, {
+            method: 'POST',
+        });
+    },
+
+    async testWorkspace(projectId) {
+        return await this.request(`/api/orchestrator/projects/${encodeURIComponent(projectId)}/test`, {
+            method: 'POST',
+        });
+    },
+
+    async teachConcept(projectId, topic, level = 'intermediate') {
+        return await this.request(`/api/orchestrator/projects/${encodeURIComponent(projectId)}/teach`, {
+            method: 'POST',
+            body: JSON.stringify({ topic, level }),
+        });
+    },
+
+    async syncGitHub(projectId, token, repositoryName = '', isPrivate = true) {
+        return await this.request(`/api/orchestrator/projects/${encodeURIComponent(projectId)}/github`, {
+            method: 'POST',
+            body: JSON.stringify({
+                token,
+                repository_name: repositoryName,
+                private: isPrivate,
+            }),
+        });
+    },
+
+    async deployCloud(projectId, provider = 'vercel', verifyUrl = '') {
+        return await this.request(`/api/orchestrator/projects/${encodeURIComponent(projectId)}/deploy`, {
+            method: 'POST',
+            body: JSON.stringify({
+                provider,
+                verify_url: verifyUrl,
+            }),
+        });
+    },
+
+    async getWorkspaceFiles(projectId) {
+        return await this.request(`/api/orchestrator/projects/${encodeURIComponent(projectId)}/files`);
     },
 
     // ── Health & System ────────────────────────────────────────────────────

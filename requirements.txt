@@ -1,37 +1,42 @@
 # Web Framework
-fastapi>=0.136.0
-uvicorn[standard]>=0.45.0
-python-multipart>=0.0.32
-jinja2>=3.1.6
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.12
+jinja2>=3.1.4
 
 # Database
-sqlalchemy>=2.0.52
+sqlalchemy>=2.0.35
 aiosqlite>=0.20.0
-alembic>=1.15.0
+alembic>=1.13.0
 
 # Authentication
-python-jose[cryptography]>=3.4.0
+python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 bcrypt>=4.0.0
 
 # HTTP / Research
-httpx>=0.28.0
-aiohttp>=3.14.0
-requests>=2.34.0
+httpx>=0.27.0
+aiohttp>=3.10.0
+requests>=2.32.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
+
+# Data Science & NLP
+pandas>=2.0.0
+numpy>=1.26.0
+scikit-learn>=1.4.0
 
 # AI Providers
 google-genai>=2.19.0
 anthropic>=0.111.0
 
+# Conversational UI (Optional Interface)
+streamlit>=1.35.0
+
 # Configuration
-python-dotenv>=1.2.0
-pydantic-settings>=2.15.0
+python-dotenv>=1.0.0
+pydantic-settings>=2.4.0
 
 # Testing
 pytest>=8.0.0
 pytest-asyncio>=0.24.0
-httpx  # for TestClient
-
-# Utilities

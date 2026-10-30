@@ -163,7 +163,28 @@ async def analyze_with_ai(prompt: str) -> Optional[str]:
         return None
 
     try:
-        if settings.AI_PROVIDER == "google":
+        if settings.AI_PROVIDER == "openrouter" or (settings.OPENROUTER_API_KEY and not (settings.GOOGLE_API_KEY or settings.ANTHROPIC_API_KEY)):
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                res = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                        "HTTP-Referer": "https://problempilot.ai",
+                        "X-Title": "ProblemPilot AI",
+                    },
+                    json={
+                        "model": settings.OPENROUTER_MODEL,
+                        "messages": [{"role": "user", "content": prompt}],
+                    },
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    choices = data.get("choices", [])
+                    if choices:
+                        return choices[0].get("message", {}).get("content", "")
+                logger.error(f"OpenRouter API returned status {res.status_code}: {res.text}")
+                return None
+        elif settings.AI_PROVIDER == "google":
             from google import genai
             client = genai.Client(api_key=settings.GOOGLE_API_KEY)
             response = client.models.generate_content(

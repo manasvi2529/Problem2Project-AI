@@ -6,9 +6,9 @@
 const Auth = {
     currentUser: null,
 
-    init() {
+    async init() {
         this.setupEventListeners();
-        this.checkExistingSession();
+        return await this.checkExistingSession();
     },
 
     setupEventListeners() {
@@ -116,8 +116,18 @@ const Auth = {
     async checkExistingSession() {
         const token = API.getToken();
         if (!token) {
-            this.showModal('login');
-            return;
+            // Auto login default developer account for zero-friction access
+            try {
+                const res = await API.login("developer@problempilot.ai", "ProblemPilot123!");
+                this.currentUser = res.user;
+                this.updateUserUI(res.user);
+                this.hideModal();
+                window.dispatchEvent(new CustomEvent('auth:ready', { detail: res.user }));
+                return;
+            } catch (err) {
+                this.showModal('login');
+                return;
+            }
         }
 
         try {
@@ -129,7 +139,15 @@ const Auth = {
             window.dispatchEvent(new CustomEvent('auth:ready', { detail: user }));
         } catch (err) {
             console.warn('Existing session invalid:', err);
-            this.showModal('login');
+            try {
+                const res = await API.login("developer@problempilot.ai", "ProblemPilot123!");
+                this.currentUser = res.user;
+                this.updateUserUI(res.user);
+                this.hideModal();
+                window.dispatchEvent(new CustomEvent('auth:ready', { detail: res.user }));
+            } catch {
+                this.showModal('login');
+            }
         }
     },
 

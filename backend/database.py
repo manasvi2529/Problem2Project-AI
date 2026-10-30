@@ -37,7 +37,25 @@ async def get_db() -> AsyncSession:
 
 
 async def init_db():
-    """Create all tables. Called on startup."""
+    """Create all tables and seed default workspace user on startup."""
     async with engine.begin() as conn:
         from backend.models import user, project, research, approval, audit  # noqa
         await conn.run_sync(Base.metadata.create_all)
+
+    # Seed default developer user for zero-friction access
+    async with AsyncSessionLocal() as session:
+        from backend.models.user import User
+        from backend.security import hash_password
+        from sqlalchemy import select
+        res = await session.execute(select(User).where(User.email == "developer@problempilot.ai"))
+        if not res.scalar_one_or_none():
+            dev_user = User(
+                id="default-dev-user-0001",
+                email="developer@problempilot.ai",
+                username="developer",
+                hashed_password=hash_password("ProblemPilot123!"),
+                full_name="Principal Architect",
+                operating_mode="hybrid",
+            )
+            session.add(dev_user)
+            await session.commit()

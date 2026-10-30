@@ -274,6 +274,31 @@ async def get_research_session(
     }
 
 
+@router.get("/sessions/{session_id}/problems")
+async def get_session_problems(
+    session_id: str,
+    user: User = Depends(get_user_from_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get all problem candidates discovered in a specific session."""
+    sess_check = await db.execute(
+        select(ResearchSession).where(
+            ResearchSession.id == session_id,
+            ResearchSession.owner_id == user.id,
+        )
+    )
+    if not sess_check.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Research session not found")
+
+    result = await db.execute(
+        select(ProblemCandidate)
+        .where(ProblemCandidate.session_id == session_id)
+        .order_by(ProblemCandidate.overall_score.desc())
+    )
+    problems = result.scalars().all()
+    return {"problems": [p.to_dict() for p in problems]}
+
+
 @router.get("/integration-status")
 async def research_integration_status():
     """Check which research integrations are configured."""

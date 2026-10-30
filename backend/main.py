@@ -42,23 +42,25 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# CORS — secure origins for browser with credentials
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ── API Routers ──────────────────────────────────────────────────────────────
-from backend.routers import auth, research, projects, approvals, discover
+from backend.routers import auth, research, projects, approvals, discover, orchestrator
 
 app.include_router(auth.router)
 app.include_router(research.router)
 app.include_router(discover.router)
 app.include_router(projects.router)
 app.include_router(approvals.router)
+app.include_router(orchestrator.router)
 
 
 # ── API Health Check ─────────────────────────────────────────────────────────

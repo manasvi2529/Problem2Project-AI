@@ -3,6 +3,7 @@ Approvals router — manage approval requests and workflow states.
 Backend-enforced approval engine.
 """
 from datetime import datetime, timezone
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -21,8 +22,9 @@ router = APIRouter(prefix="/api/approvals", tags=["approvals"])
 
 class ApprovalDecision(BaseModel):
     decision: str = Field(..., pattern="^(approved|rejected|modified)$")
-    reason: str = ""
-    modifications: dict = {}
+    reason: Optional[str] = ""
+    feedback: Optional[str] = ""  # Frontend alias support
+    modifications: Optional[dict] = {}
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
@@ -78,6 +80,7 @@ async def get_approval(
 
 
 @router.post("/{approval_id}/decide")
+@router.post("/{approval_id}/respond")
 async def decide_approval(
     approval_id: str,
     body: ApprovalDecision,
@@ -96,8 +99,8 @@ async def decide_approval(
         raise HTTPException(status_code=409, detail=f"Approval already decided: {approval.decision}")
 
     approval.decision = body.decision
-    approval.decision_reason = body.reason
-    approval.modifications = body.modifications
+    approval.decision_reason = body.reason or body.feedback or ""
+    approval.modifications = body.modifications or {}
     approval.decided_at = datetime.now(timezone.utc)
 
     # Audit log
