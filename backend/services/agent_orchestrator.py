@@ -333,12 +333,12 @@ class AgentOrchestrator:
         if not project:
             raise ValueError("Project not found")
 
-        auth_token = token or user.github_access_token or settings.GITHUB_PERSONAL_ACCESS_TOKEN
+        auth_token = token or user.get_github_token() or settings.GITHUB_PERSONAL_ACCESS_TOKEN
         if not auth_token:
             return {
                 "success": False,
                 "configured": False,
-                "error": "GitHub authorization missing. Please connect your GitHub account via OAuth in Integrations or provide a token.",
+                "error": "GitHub authorization missing. Please connect your GitHub account via OAuth in Cloud & GitHub settings or provide a token.",
             }
 
         workspace_dir = self.workspace_builder.get_workspace_dir(project.id, project.name)
@@ -515,6 +515,35 @@ class AgentOrchestrator:
         project.deploy_status = "deployed" if deploy_res.get("success") else "failed"
         if deploy_res.get("deploy_url"):
             project.deploy_url = deploy_res["deploy_url"]
+        from datetime import datetime, timezone
+        project.last_deploy_at = datetime.now(timezone.utc)
+
+        # Track persistent deployment history
+        from backend.models.deployment import Deployment
+        from backend.models.audit import AuditLog
+
+        dep_record = Deployment(
+            project_id=project.id,
+            owner_id=user.id,
+            provider=provider,
+            deployment_id=deploy_res.get("deployment_id"),
+            deploy_url=deploy_res.get("deploy_url"),
+            status="ready" if deploy_res.get("success") else "failed",
+            error_details=deploy_res.get("error"),
+            manifests_generated=deploy_res.get("manifests_generated", []),
+            health_check_result=deploy_res.get("health_check", {}),
+            verified_at=datetime.now(timezone.utc) if deploy_res.get("health_check", {}).get("verified") else None,
+        )
+        db.add(dep_record)
+
+        audit_entry = AuditLog(
+            user_id=user.id,
+            project_id=project.id,
+            action=f"cloud_deploy_{provider}",
+            category="deployment",
+            description=f"Cloud deployment to {provider}: status={project.deploy_status}, url={project.deploy_url}",
+        )
+        db.add(audit_entry)
 
         wf = await self.approval_engine.get_or_create_workflow(db, project.id, user.id, "project", user.operating_mode)
         wf.current_step = "cloud_deploy"

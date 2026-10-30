@@ -30,6 +30,11 @@ ENV/
 
 # Environment Variables
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
 
 # SQLite Database & Sandboxes
 data/*.db

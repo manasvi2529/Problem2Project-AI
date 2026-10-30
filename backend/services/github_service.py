@@ -37,9 +37,20 @@ class GitHubService:
     def scan_files_for_secrets(files: Dict[str, str]) -> List[Dict[str, str]]:
         """
         Scan all files for exposed secrets before allowing any commit or push.
+        Checks for .env files, private keys, API keys, and sensitive tokens.
         """
         findings = []
         for file_name, content in files.items():
+            # Check sensitive file names
+            base_name = Path(file_name).name.lower()
+            if base_name in (".env", ".env.local", ".env.production", "id_rsa", "id_ed25519", "credentials.json"):
+                findings.append({
+                    "file": file_name,
+                    "type": "Sensitive Environment/Key File",
+                    "description": f"Restricted environment or private credential file detected ({file_name}).",
+                })
+
+            # Check pattern matches
             for pattern, label in SECRET_PATTERNS:
                 matches = re.findall(pattern, content)
                 if matches:
@@ -132,9 +143,11 @@ class GitHubService:
         repo_clone_url: str,
         token: str,
         commit_message: str = "Initial commit by ProblemPilot AI",
+        force: bool = False,
     ) -> Dict[str, Any]:
         """
-        Initialize git, stage files, commit, configure remote with token, and push.
+        Initialize git, stage files, commit, configure remote with token, push,
+        and sanitize git remote URL immediately to avoid persisting tokens on disk.
         """
         # Embed token safely for authenticated push: https://oauth2:TOKEN@github.com/...
         auth_url = repo_clone_url
@@ -151,54 +164,76 @@ class GitHubService:
             stdout, stderr = await proc.communicate()
             return proc.returncode, stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")
 
-        # 1. Initialize git if needed
-        await run_git(["init"])
-        await run_git(["config", "user.name", "ProblemPilot AI"])
-        await run_git(["config", "user.email", "bot@problempilot.ai"])
-        await run_git(["branch", "-M", "main"])
+        try:
+            # 1. Initialize git if needed
+            await run_git(["init"])
+            await run_git(["config", "user.name", "ProblemPilot AI"])
+            await run_git(["config", "user.email", "bot@problempilot.ai"])
+            await run_git(["branch", "-M", "main"])
 
-        # 2. Stage all files
-        await run_git(["add", "."])
+            # 2. Stage all files
+            await run_git(["add", "."])
 
-        # 3. Commit
-        code, out, err = await run_git(["commit", "-m", commit_message])
+            # 3. Commit
+            await run_git(["commit", "-m", commit_message])
 
-        # 4. Remote setup
-        await run_git(["remote", "remove", "origin"])
-        await run_git(["remote", "add", "origin", auth_url])
+            # 4. Remote setup with temporary auth URL
+            await run_git(["remote", "remove", "origin"])
+            await run_git(["remote", "add", "origin", auth_url])
 
-        # 5. Push
-        code, out, err = await run_git(["push", "-u", "origin", "main", "--force"])
-        if code != 0:
-            # Mask token in error message
-            safe_err = err.replace(token, "[REDACTED_TOKEN]")
-            return {"success": False, "error": f"Git push failed: {safe_err}"}
+            # 5. Push safely without blind force-pushing
+            push_args = ["push", "-u", "origin", "main"]
+            if force:
+                push_args.append("--force")
 
-        # 6. Verify commit on remote
-        verification = await GitHubService.verify_remote_commit(
-            token=token,
-            full_name=repo_clone_url.replace(".git", "").split("github.com/")[-1],
-            branch="main",
-        )
+            code, out, err = await run_git(push_args)
+            if code != 0:
+                # If rejected due to remote history, provide descriptive conflict detection
+                if "fetch first" in err or "non-fast-forward" in err or "conflict" in err:
+                    safe_err = err.replace(token, "[REDACTED_TOKEN]")
+                    return {
+                        "success": False,
+                        "conflict": True,
+                        "error": f"Push rejected: Remote repository already has conflicting commits. Use a fresh repository or merge history: {safe_err}",
+                    }
+                safe_err = err.replace(token, "[REDACTED_TOKEN]")
+                return {"success": False, "error": f"Git push failed: {safe_err}"}
 
-        return {
-            "success": True,
-            "commit_message": commit_message,
-            "branch": "main",
-            "remote_verified": verification.get("verified", False),
-            "latest_commit_sha": verification.get("sha"),
-            "message": "Successfully pushed project to GitHub and verified remote repository state.",
-        }
+            # 6. Verify commit on remote
+            clean_full_name = repo_clone_url.replace(".git", "").split("github.com/")[-1]
+            verification = await GitHubService.verify_remote_commit(
+                token=token,
+                full_name=clean_full_name,
+                branch="main",
+            )
+
+            return {
+                "success": True,
+                "commit_message": commit_message,
+                "branch": "main",
+                "remote_verified": verification.get("verified", False),
+                "latest_commit_sha": verification.get("sha"),
+                "commit_details": verification,
+                "message": "Successfully pushed project to GitHub and verified remote repository state.",
+            }
+        finally:
+            # Critical Security Step: Sanitize remote URL on disk so token is never stored in .git/config
+            try:
+                await run_git(["remote", "set-url", "origin", repo_clone_url])
+            except Exception:
+                pass
 
     @staticmethod
     def get_oauth_authorization_url(state: str) -> Dict[str, Any]:
         """
         Generate secure GitHub OAuth authorization URL with CSRF state token.
         """
-        if not settings.GITHUB_CLIENT_ID:
+        missing = settings.get_missing_github_oauth_vars()
+        if missing:
             return {
                 "configured": False,
-                "error": "GitHub OAuth is not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in .env.",
+                "missing_vars": missing,
+                "error": f"GitHub OAuth is not configured. Missing required variables: {', '.join(missing)}.",
             }
 
         url = (
@@ -212,6 +247,7 @@ class GitHubService:
             "configured": True,
             "auth_url": url,
             "state": state,
+            "callback_url": settings.GITHUB_REDIRECT_URI,
         }
 
     @staticmethod
@@ -219,10 +255,12 @@ class GitHubService:
         """
         Exchange OAuth callback authorization code for an authenticated GitHub access token.
         """
-        if not settings.GITHUB_CLIENT_ID or not settings.GITHUB_CLIENT_SECRET:
+        missing = settings.get_missing_github_oauth_vars()
+        if missing:
             return {
                 "success": False,
-                "error": "GitHub OAuth client credentials are not configured.",
+                "missing_vars": missing,
+                "error": f"GitHub OAuth client credentials are not configured. Missing: {', '.join(missing)}.",
             }
 
         payload = {
@@ -234,27 +272,33 @@ class GitHubService:
         headers = {"Accept": "application/json"}
 
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post("https://github.com/login/oauth/access_token", headers=headers, json=payload)
-            if resp.status_code == 200:
-                data = resp.json()
-                if "access_token" in data:
-                    # Fetch user info with the acquired token
-                    user_info = await GitHubService.verify_github_token(data["access_token"])
+            try:
+                resp = await client.post("https://github.com/login/oauth/access_token", headers=headers, json=payload)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if "access_token" in data:
+                        # Fetch user info with the acquired token
+                        user_info = await GitHubService.verify_github_token(data["access_token"])
+                        return {
+                            "success": True,
+                            "access_token": data["access_token"],
+                            "token_type": data.get("token_type", "bearer"),
+                            "scope": data.get("scope", ""),
+                            "user": user_info,
+                        }
                     return {
-                        "success": True,
-                        "access_token": data["access_token"],
-                        "token_type": data.get("token_type", "bearer"),
-                        "scope": data.get("scope", ""),
-                        "user": user_info,
+                        "success": False,
+                        "error": data.get("error_description", data.get("error", "Failed to retrieve access token from GitHub.")),
                     }
                 return {
                     "success": False,
-                    "error": data.get("error_description", "Failed to retrieve access token from GitHub."),
+                    "error": f"GitHub token exchange failed (HTTP {resp.status_code})",
                 }
-            return {
-                "success": False,
-                "error": f"GitHub token exchange failed (HTTP {resp.status_code})",
-            }
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": f"Network error during GitHub token exchange: {str(e)}",
+                }
 
     @staticmethod
     async def verify_remote_commit(token: str, full_name: str, branch: str = "main") -> Dict[str, Any]:

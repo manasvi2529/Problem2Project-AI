@@ -356,10 +356,27 @@ const API = {
         return await this.request('/api/integrations/github/authorize');
     },
 
+    async testGitHubConnection() {
+        return await this.request('/api/integrations/github/test');
+    },
+
     async disconnectGitHub() {
         return await this.request('/api/integrations/github', {
             method: 'DELETE',
         });
+    },
+
+    async verifyVercelConnection() {
+        return await this.request('/api/integrations/vercel/verify');
+    },
+
+    async verifyRenderConnection() {
+        return await this.request('/api/integrations/render/verify');
+    },
+
+    async getDeployments(projectId = '') {
+        const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+        return await this.request(`/api/integrations/deployments${query}`);
     },
 
     // ── Health & System ────────────────────────────────────────────────────

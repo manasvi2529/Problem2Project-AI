@@ -1,5 +1,6 @@
 """User model — authentication, profile, and settings."""
 import uuid
+from typing import Optional
 from datetime import datetime, timezone
 from sqlalchemy import String, Boolean, DateTime, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -25,9 +26,20 @@ class User(Base):
     preferences: Mapped[dict] = mapped_column(JSON, default=dict)
 
     # GitHub integration
-    github_access_token: Mapped[str] = mapped_column(Text, nullable=True)
-    github_username: Mapped[str] = mapped_column(String(100), nullable=True)
-    github_connected_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    github_access_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    github_username: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    github_connected_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    github_oauth_state: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+
+    def set_github_token(self, token: Optional[str]):
+        """Encrypt token before persisting at rest."""
+        from backend.security import encrypt_credential
+        self.github_access_token = encrypt_credential(token) if token else None
+
+    def get_github_token(self) -> Optional[str]:
+        """Decrypt token from storage at rest."""
+        from backend.security import decrypt_credential
+        return decrypt_credential(self.github_access_token) if self.github_access_token else None
 
     # Relationships
     projects = relationship("Project", back_populates="owner", cascade="all, delete-orphan")

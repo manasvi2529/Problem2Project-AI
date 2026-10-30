@@ -1357,8 +1357,8 @@ const App = {
         container.innerHTML = `
             <div class="page-header">
                 <div>
-                    <h1 class="page-title">Integrations & System Health</h1>
-                    <p class="page-subtitle">Real-time status of AI providers, live data scrapers, GitHub authentication, and cloud deployment targets.</p>
+                    <h1 class="page-title">Integrations & Cloud Deployment</h1>
+                    <p class="page-subtitle">Secure OAuth 2.0 connection, encrypted token storage, automated private repository publishing, and authentic cloud deployments.</p>
                 </div>
             </div>
             <div class="loading-state"><div class="spinner"></div><p>Querying integration providers...</p></div>
@@ -1371,28 +1371,38 @@ const App = {
             const cloud = status.cloud || {};
             const vercel = cloud.vercel || {};
             const render = cloud.render || {};
+            const callbackUrl = status.callback_url || (window.location.origin + '/api/integrations/github/callback');
+
+            // Fetch deployment history
+            let deployments = [];
+            try {
+                const depRes = await API.getDeployments();
+                deployments = depRes.deployments || [];
+            } catch (e) {
+                logger.debug('Could not load deployments history', e);
+            }
 
             container.innerHTML = `
-                <div class="page-header">
+                <div class="page-header" style="margin-bottom: 24px;">
                     <div>
-                        <h1 class="page-title">Integrations & System Health</h1>
-                        <p class="page-subtitle">Real-time status of AI providers, live data scrapers, GitHub authentication, and cloud deployment targets.</p>
+                        <h1 class="page-title">Integrations & Cloud Deployment</h1>
+                        <p class="page-subtitle">Secure OAuth 2.0 connection, encrypted token storage, automated private repository publishing, and authentic cloud deployments.</p>
                     </div>
                 </div>
 
-                <div class="integrations-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 24px;">
+                <div class="integrations-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 24px;">
                     <div class="glass-card stat-card">
-                        <h3>AI Provider</h3>
-                        <div class="stat-value ${ai.configured ? 'text-success' : 'text-warning'}">${ai.configured ? 'Connected' : 'Offline / Autonomous'}</div>
+                        <h3>AI Engine</h3>
+                        <div class="stat-value ${ai.configured ? 'text-success' : 'text-warning'}">${ai.configured ? 'Connected' : 'Autonomous Fallback'}</div>
                         <span class="text-muted text-sm">Provider: ${ai.provider || 'openrouter'} (${ai.model || 'default'})</span>
                     </div>
 
                     <div class="glass-card stat-card">
                         <h3>GitHub OAuth & Git</h3>
                         <div class="stat-value ${gh.connected ? 'text-success' : (gh.oauth_enabled ? 'text-info' : 'text-muted')}">
-                            ${gh.connected ? `@${gh.username}` : (gh.oauth_enabled ? 'OAuth Ready' : 'PAT Token')}
+                            ${gh.connected ? `@${gh.username}` : (gh.oauth_enabled ? 'OAuth Configured' : 'Setup Required')}
                         </div>
-                        <span class="text-muted text-sm">${gh.connected ? `Connected: ${gh.connected_at ? new Date(gh.connected_at).toLocaleDateString() : 'Active'}` : 'Private repo sync & automated commits'}</span>
+                        <span class="text-muted text-sm">${gh.connected ? `Connected: ${gh.connected_at ? new Date(gh.connected_at).toLocaleDateString() : 'Active'}` : 'Private repo sync & secret scanning'}</span>
                     </div>
 
                     <div class="glass-card stat-card">
@@ -1408,47 +1418,237 @@ const App = {
                     </div>
                 </div>
 
-                <div class="glass-card" style="margin-bottom: 20px;">
-                    <h3>GitHub Account Connection</h3>
-                    <p class="text-muted text-sm" style="margin: 8px 0 16px;">
-                        Connect your GitHub account securely to publish projects, create private repositories, and push verified code without pasting personal access tokens into chat.
-                    </p>
-                    ${gh.connected ? `
-                        <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); padding: 14px 18px; border-radius: 8px;">
-                            <div>
-                                <span style="font-weight: 600; color: #10b981;">✓ Connected as GitHub User:</span> <code>${gh.username}</code>
+                <!-- GitHub Integration Card -->
+                <div class="glass-card" style="margin-bottom: 24px;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px;">
+                        <div>
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <h3 style="margin: 0;">GitHub Integration</h3>
+                                <span class="badge ${gh.connected ? 'badge-success' : (gh.oauth_enabled ? 'badge-info' : 'badge-warning')}">
+                                    ${gh.connected ? 'Connected' : (gh.oauth_enabled ? 'Not Connected' : 'Not Configured')}
+                                </span>
                             </div>
-                            <button class="btn btn-secondary btn-sm" id="btn-disconnect-github">Disconnect</button>
+                            <p class="text-muted text-sm" style="margin: 6px 0 0;">
+                                Authenticate via OAuth 2.0 with CSRF protection. Tokens are encrypted at rest with AES-256 and never exposed in browser or API payloads.
+                            </p>
+                        </div>
+                        <button class="btn btn-secondary btn-sm" id="btn-toggle-gh-wizard">📘 Setup Wizard</button>
+                    </div>
+
+                    ${gh.connected ? `
+                        <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <div style="font-weight: 600; color: #10b981; margin-bottom: 4px;">✓ Authenticated GitHub Account: <code>@${gh.username}</code></div>
+                                    <div class="text-muted text-sm">Permissions: <code>repo</code> (private/public repository creation & authenticated push), <code>read:user</code></div>
+                                </div>
+                                <div style="display: flex; gap: 8px;">
+                                    <button class="btn btn-secondary btn-sm" id="btn-test-github">Test Connection</button>
+                                    <button class="btn btn-danger btn-sm" id="btn-disconnect-github">Disconnect</button>
+                                </div>
+                            </div>
+                            <div id="gh-test-result" style="margin-top: 10px; display: none;"></div>
                         </div>
                     ` : `
-                        <div style="display: flex; gap: 12px; align-items: center;">
-                            <button class="btn btn-primary" id="btn-connect-github">Connect GitHub Account</button>
-                            <span class="text-muted text-sm">OAuth 2.0 with CSRF protection</span>
+                        <div style="background: rgba(0, 0, 0, 0.2); border: 1px solid var(--border-color); padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <div style="font-weight: 500; margin-bottom: 4px;">No GitHub Account Linked</div>
+                                    <div class="text-muted text-sm">${gh.oauth_enabled ? 'OAuth credentials configured in backend. Ready to connect.' : 'Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in .env to enable OAuth.'}</div>
+                                </div>
+                                <div>
+                                    <button class="btn btn-primary" id="btn-connect-github" ${gh.oauth_enabled ? '' : 'disabled'}>Connect GitHub Account</button>
+                                </div>
+                            </div>
                         </div>
                     `}
+
+                    <!-- Collapsible GitHub Setup Wizard -->
+                    <div id="gh-setup-wizard" style="display: none; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: 8px; padding: 18px; margin-top: 14px;">
+                        <h4 style="margin-top: 0; color: #818cf8;">GitHub OAuth 2.0 Setup Guide</h4>
+                        <ol style="margin: 0; padding-left: 20px; line-height: 1.7; font-size: 0.9rem;" class="text-muted">
+                            <li>Sign in to GitHub and open <strong>Settings &rarr; Developer Settings &rarr; OAuth Apps</strong>.</li>
+                            <li>Click <strong>New OAuth App</strong>.</li>
+                            <li>Application Name: <code>ProblemPilot AI</code> (or your choice).</li>
+                            <li>Homepage URL: <code>${window.location.origin}</code></li>
+                            <li>Authorization Callback URL (Exact):
+                                <div style="display: flex; align-items: center; gap: 8px; margin: 6px 0;">
+                                    <input type="text" readonly value="${callbackUrl}" id="input-gh-cb" style="background: rgba(0,0,0,0.5); border: 1px solid var(--border-color); color: #a5b4fc; padding: 4px 8px; border-radius: 4px; font-family: monospace; width: 380px;">
+                                    <button class="btn btn-secondary btn-sm" id="btn-copy-gh-cb">Copy</button>
+                                </div>
+                            </li>
+                            <li>Click <strong>Register application</strong>.</li>
+                            <li>Copy the <strong>Client ID</strong> and generate a <strong>Client Secret</strong>.</li>
+                            <li>Add them to your <code>.env</code> file:
+                                <pre style="background: rgba(0,0,0,0.6); padding: 8px; border-radius: 4px; margin: 6px 0; color: #a7f3d0;">GITHUB_CLIENT_ID=your_client_id_here
+GITHUB_CLIENT_SECRET=your_client_secret_here
+GITHUB_REDIRECT_URI=${callbackUrl}</pre>
+                            </li>
+                            <li>Restart the backend server and click <strong>Connect GitHub Account</strong>.</li>
+                        </ol>
+                    </div>
                 </div>
 
-                <div class="glass-card">
-                    <h3>Cloud Deployment Providers</h3>
-                    <p class="text-muted text-sm" style="margin: 8px 0 16px;">
-                        Every generated project automatically receives production cloud deployment configurations.
-                    </p>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-                        <div style="padding: 16px; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.2);">
-                            <h4>Vercel</h4>
-                            <p class="text-muted text-sm" style="margin: 6px 0 10px;">${vercel.description || 'FastAPI serverless + HTML5 static assets'}</p>
-                            <div class="badge badge-info">${vercel.expected_cost || 'Free Tier'}</div>
+                <!-- Vercel Cloud Deployment Card -->
+                <div class="glass-card" style="margin-bottom: 24px;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px;">
+                        <div>
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <h3 style="margin: 0;">Vercel Serverless Hosting</h3>
+                                <span class="badge ${vercel.configured ? 'badge-success' : 'badge-warning'}">
+                                    ${vercel.configured ? 'Configured' : 'Manifests Only'}
+                                </span>
+                            </div>
+                            <p class="text-muted text-sm" style="margin: 6px 0 0;">
+                                Deploys full-stack projects: Python ASGI backend via <code>@vercel/python</code> and responsive UI via <code>@vercel/static</code> with global Edge CDN.
+                            </p>
                         </div>
-                        <div style="padding: 16px; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.2);">
-                            <h4>Render</h4>
-                            <p class="text-muted text-sm" style="margin: 6px 0 10px;">${render.description || 'Containerized web service'}</p>
-                            <div class="badge badge-info">${render.expected_cost || 'Free Tier'}</div>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn btn-secondary btn-sm" id="btn-test-vercel">Verify Token</button>
+                            <button class="btn btn-secondary btn-sm" id="btn-toggle-vercel-wizard">📘 Setup Wizard</button>
                         </div>
                     </div>
+                    <div id="vercel-test-result" style="margin-bottom: 12px; display: none;"></div>
+
+                    <!-- Collapsible Vercel Setup Wizard -->
+                    <div id="vercel-setup-wizard" style="display: none; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: 8px; padding: 18px; margin-top: 14px;">
+                        <h4 style="margin-top: 0; color: #818cf8;">Vercel API Token Setup Guide</h4>
+                        <ol style="margin: 0; padding-left: 20px; line-height: 1.7; font-size: 0.9rem;" class="text-muted">
+                            <li>Create or log in to your account at <a href="https://vercel.com" target="_blank" style="color: #818cf8;">vercel.com</a>.</li>
+                            <li>Go to <strong>Account Settings &rarr; Tokens</strong> (<a href="https://vercel.com/account/tokens" target="_blank" style="color: #818cf8;">https://vercel.com/account/tokens</a>).</li>
+                            <li>Click <strong>Create Token</strong>, choose a name (e.g. <code>ProblemPilot Deployer</code>) and scope.</li>
+                            <li>Copy the generated token and paste it into your <code>.env</code> file:
+                                <pre style="background: rgba(0,0,0,0.6); padding: 8px; border-radius: 4px; margin: 6px 0; color: #a7f3d0;">VERCEL_TOKEN=your_vercel_token_here</pre>
+                            </li>
+                            <li>Optional: If deploying to a team, add <code>VERCEL_TEAM_ID=your_team_id</code>.</li>
+                            <li>Restart backend and click <strong>Verify Token</strong> above to confirm API readiness.</li>
+                            <li>Projects can now be published and deployed directly from the Project Workspace with one click.</li>
+                        </ol>
+                    </div>
+                </div>
+
+                <!-- Deployment History -->
+                <div class="glass-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                        <div>
+                            <h3 style="margin: 0;">Cloud Deployment History</h3>
+                            <p class="text-muted text-sm" style="margin: 4px 0 0;">Audit record of all submitted cloud builds, live URLs, and health checks.</p>
+                        </div>
+                        <span class="text-muted text-sm">${deployments.length} total deployment(s)</span>
+                    </div>
+
+                    ${deployments.length > 0 ? `
+                        <div style="overflow-x: auto;">
+                            <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.9rem;">
+                                <thead>
+                                    <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-muted);">
+                                        <th style="padding: 10px 12px;">Provider</th>
+                                        <th style="padding: 10px 12px;">Status</th>
+                                        <th style="padding: 10px 12px;">Deployment ID</th>
+                                        <th style="padding: 10px 12px;">Live URL</th>
+                                        <th style="padding: 10px 12px;">Created</th>
+                                        <th style="padding: 10px 12px;">Health</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${deployments.map(d => `
+                                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                                            <td style="padding: 10px 12px; text-transform: capitalize; font-weight: 500;">${d.provider}</td>
+                                            <td style="padding: 10px 12px;">
+                                                <span class="badge ${d.status === 'ready' ? 'badge-success' : (d.status === 'failed' ? 'badge-danger' : 'badge-info')}">
+                                                    ${d.status.toUpperCase()}
+                                                </span>
+                                            </td>
+                                            <td style="padding: 10px 12px; font-family: monospace; font-size: 0.8rem; color: #a5b4fc;">
+                                                ${d.deployment_id ? d.deployment_id.substring(0, 14) + '...' : '—'}
+                                            </td>
+                                            <td style="padding: 10px 12px;">
+                                                ${d.deploy_url ? `<a href="${d.deploy_url}" target="_blank" style="color: #6366f1; text-decoration: underline;">${d.deploy_url}</a>` : '—'}
+                                            </td>
+                                            <td style="padding: 10px 12px; color: var(--text-muted);">
+                                                ${d.created_at ? new Date(d.created_at).toLocaleString() : '—'}
+                                            </td>
+                                            <td style="padding: 10px 12px;">
+                                                ${d.health_check_result && d.health_check_result.verified ? '<span style="color: #10b981;">✓ Healthy</span>' : '<span style="color: var(--text-muted);">—</span>'}
+                                            </td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    ` : `
+                        <div style="text-align: center; padding: 24px; color: var(--text-muted); background: rgba(0,0,0,0.15); border-radius: 8px;">
+                            No deployments executed yet. Generate and deploy a project from the <strong>Project Workspace</strong> to see deployment logs here.
+                        </div>
+                    `}
                 </div>
             `;
 
             // Attach event listeners
+            const toggleGhWizard = document.getElementById('btn-toggle-gh-wizard');
+            const ghWizard = document.getElementById('gh-setup-wizard');
+            if (toggleGhWizard && ghWizard) {
+                toggleGhWizard.addEventListener('click', () => {
+                    ghWizard.style.display = ghWizard.style.display === 'none' ? 'block' : 'none';
+                });
+            }
+
+            const copyGhCb = document.getElementById('btn-copy-gh-cb');
+            const inputGhCb = document.getElementById('input-gh-cb');
+            if (copyGhCb && inputGhCb) {
+                copyGhCb.addEventListener('click', () => {
+                    navigator.clipboard.writeText(inputGhCb.value).then(() => {
+                        this.showToast('Callback URL copied to clipboard!', 'success');
+                    });
+                });
+            }
+
+            const toggleVercelWizard = document.getElementById('btn-toggle-vercel-wizard');
+            const vercelWizard = document.getElementById('vercel-setup-wizard');
+            if (toggleVercelWizard && vercelWizard) {
+                toggleVercelWizard.addEventListener('click', () => {
+                    vercelWizard.style.display = vercelWizard.style.display === 'none' ? 'block' : 'none';
+                });
+            }
+
+            const testGhBtn = document.getElementById('btn-test-github');
+            const ghTestResult = document.getElementById('gh-test-result');
+            if (testGhBtn && ghTestResult) {
+                testGhBtn.addEventListener('click', async () => {
+                    ghTestResult.style.display = 'block';
+                    ghTestResult.innerHTML = '<span class="text-sm text-muted">Testing GitHub API connection...</span>';
+                    try {
+                        const res = await API.testGitHubConnection();
+                        if (res.connected) {
+                            ghTestResult.innerHTML = `<div style="color: #10b981; font-size: 0.85rem;">✓ Connection verified: @${res.username} (${res.name || 'Developer'}), Repos: ${res.public_repos}, Scopes: [${res.scopes || 'repo,read:user'}]</div>`;
+                        } else {
+                            ghTestResult.innerHTML = `<div style="color: #ef4444; font-size: 0.85rem;">✗ ${res.message || res.error}</div>`;
+                        }
+                    } catch (e) {
+                        ghTestResult.innerHTML = `<div style="color: #ef4444; font-size: 0.85rem;">✗ Verification error: ${e.message}</div>`;
+                    }
+                });
+            }
+
+            const testVercelBtn = document.getElementById('btn-test-vercel');
+            const vercelTestResult = document.getElementById('vercel-test-result');
+            if (testVercelBtn && vercelTestResult) {
+                testVercelBtn.addEventListener('click', async () => {
+                    vercelTestResult.style.display = 'block';
+                    vercelTestResult.innerHTML = '<span class="text-sm text-muted">Testing Vercel API token...</span>';
+                    try {
+                        const res = await API.verifyVercelConnection();
+                        if (res.verified) {
+                            vercelTestResult.innerHTML = `<div style="background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.3); padding: 10px; border-radius: 6px; color: #10b981; font-size: 0.85rem;">✓ Vercel API Verified: User @${res.username} (${res.email || ''}), Team: ${res.team_id || 'Personal'}</div>`;
+                        } else {
+                            vercelTestResult.innerHTML = `<div style="background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); padding: 10px; border-radius: 6px; color: #ef4444; font-size: 0.85rem;">✗ ${res.error || 'Token check failed'}</div>`;
+                        }
+                    } catch (e) {
+                        vercelTestResult.innerHTML = `<div style="background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); padding: 10px; border-radius: 6px; color: #ef4444; font-size: 0.85rem;">✗ Verification error: ${e.message}</div>`;
+                    }
+                });
+            }
+
             const connectBtn = document.getElementById('btn-connect-github');
             if (connectBtn) {
                 connectBtn.addEventListener('click', async () => {
@@ -1471,6 +1671,7 @@ const App = {
                     if (confirm('Disconnect GitHub account from your profile?')) {
                         try {
                             await API.disconnectGitHub();
+                            this.showToast('GitHub account disconnected.', 'info');
                             this.renderIntegrations(container);
                         } catch (e) {
                             alert('Disconnect failed: ' + e.message);

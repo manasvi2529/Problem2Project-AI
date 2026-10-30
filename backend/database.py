@@ -39,7 +39,7 @@ async def get_db() -> AsyncSession:
 async def init_db():
     """Create all tables, migrate schema additions, and seed default workspace user on startup."""
     async with engine.begin() as conn:
-        from backend.models import user, project, research, approval, audit  # noqa
+        from backend.models import user, project, research, approval, audit, deployment  # noqa
         await conn.run_sync(Base.metadata.create_all)
 
         # Automatic lightweight schema migration for existing SQLite databases
@@ -58,6 +58,12 @@ async def init_db():
                 for col_name, col_type in new_approval_cols:
                     if col_name not in approval_cols:
                         connection.exec_driver_sql(f"ALTER TABLE approvals ADD COLUMN {col_name} {col_type}")
+
+                # Check users table columns
+                user_res = connection.exec_driver_sql("PRAGMA table_info(users)").fetchall()
+                user_cols = {row[1] for row in user_res}
+                if "github_oauth_state" not in user_cols:
+                    connection.exec_driver_sql("ALTER TABLE users ADD COLUMN github_oauth_state VARCHAR(150)")
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).warning("Schema migration warning: %s", e)

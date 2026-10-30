@@ -49,11 +49,14 @@ class Settings(BaseSettings):
     GITHUB_CLIENT_ID: Optional[str] = None
     GITHUB_CLIENT_SECRET: Optional[str] = None
     GITHUB_REDIRECT_URI: str = "http://localhost:8000/api/integrations/github/callback"
+    GITHUB_OAUTH_STATE_SECRET: Optional[str] = None
+    GITHUB_TOKEN_ENCRYPTION_KEY: Optional[str] = None
     GITHUB_PERSONAL_ACCESS_TOKEN: Optional[str] = None
 
     # Cloud Hosting Providers
     VERCEL_TOKEN: Optional[str] = None
     VERCEL_TEAM_ID: Optional[str] = None
+    VERCEL_PROJECT_ID: Optional[str] = None
     RENDER_API_KEY: Optional[str] = None
     RENDER_SERVICE_ID: Optional[str] = None
 
@@ -108,6 +111,24 @@ class Settings(BaseSettings):
     @property
     def render_configured(self) -> bool:
         return bool(self.RENDER_API_KEY and self.RENDER_API_KEY not in ("your-render-api-key-here", ""))
+
+    def get_missing_github_oauth_vars(self) -> List[str]:
+        """Return list of missing required GitHub OAuth configuration variables."""
+        missing = []
+        if not self.GITHUB_CLIENT_ID:
+            missing.append("GITHUB_CLIENT_ID")
+        if not self.GITHUB_CLIENT_SECRET:
+            missing.append("GITHUB_CLIENT_SECRET")
+        if not self.GITHUB_REDIRECT_URI:
+            missing.append("GITHUB_REDIRECT_URI")
+        return missing
+
+    def get_missing_vercel_vars(self) -> List[str]:
+        """Return list of missing required Vercel configuration variables."""
+        missing = []
+        if not self.VERCEL_TOKEN or self.VERCEL_TOKEN in ("your-vercel-token-here", ""):
+            missing.append("VERCEL_TOKEN")
+        return missing
 
 
 settings = Settings()
