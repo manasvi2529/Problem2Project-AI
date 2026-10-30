@@ -53,7 +53,7 @@ app.add_middleware(
 )
 
 # ── API Routers ──────────────────────────────────────────────────────────────
-from backend.routers import auth, research, projects, approvals, discover, orchestrator
+from backend.routers import auth, research, projects, approvals, discover, orchestrator, integrations
 
 app.include_router(auth.router)
 app.include_router(research.router)
@@ -61,6 +61,7 @@ app.include_router(discover.router)
 app.include_router(projects.router)
 app.include_router(approvals.router)
 app.include_router(orchestrator.router)
+app.include_router(integrations.router)
 
 
 # ── API Health Check ─────────────────────────────────────────────────────────

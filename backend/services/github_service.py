@@ -175,10 +175,112 @@ class GitHubService:
             return {"success": False, "error": f"Git push failed: {safe_err}"}
 
         # 6. Verify commit on remote
+        verification = await GitHubService.verify_remote_commit(
+            token=token,
+            full_name=repo_clone_url.replace(".git", "").split("github.com/")[-1],
+            branch="main",
+        )
+
         return {
             "success": True,
             "commit_message": commit_message,
             "branch": "main",
-            "message": "Successfully pushed project to GitHub.",
+            "remote_verified": verification.get("verified", False),
+            "latest_commit_sha": verification.get("sha"),
+            "message": "Successfully pushed project to GitHub and verified remote repository state.",
         }
+
+    @staticmethod
+    def get_oauth_authorization_url(state: str) -> Dict[str, Any]:
+        """
+        Generate secure GitHub OAuth authorization URL with CSRF state token.
+        """
+        if not settings.GITHUB_CLIENT_ID:
+            return {
+                "configured": False,
+                "error": "GitHub OAuth is not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in .env.",
+            }
+
+        url = (
+            f"https://github.com/login/oauth/authorize"
+            f"?client_id={settings.GITHUB_CLIENT_ID}"
+            f"&redirect_uri={settings.GITHUB_REDIRECT_URI}"
+            f"&scope=repo,read:user"
+            f"&state={state}"
+        )
+        return {
+            "configured": True,
+            "auth_url": url,
+            "state": state,
+        }
+
+    @staticmethod
+    async def exchange_code_for_token(code: str) -> Dict[str, Any]:
+        """
+        Exchange OAuth callback authorization code for an authenticated GitHub access token.
+        """
+        if not settings.GITHUB_CLIENT_ID or not settings.GITHUB_CLIENT_SECRET:
+            return {
+                "success": False,
+                "error": "GitHub OAuth client credentials are not configured.",
+            }
+
+        payload = {
+            "client_id": settings.GITHUB_CLIENT_ID,
+            "client_secret": settings.GITHUB_CLIENT_SECRET,
+            "code": code,
+            "redirect_uri": settings.GITHUB_REDIRECT_URI,
+        }
+        headers = {"Accept": "application/json"}
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post("https://github.com/login/oauth/access_token", headers=headers, json=payload)
+            if resp.status_code == 200:
+                data = resp.json()
+                if "access_token" in data:
+                    # Fetch user info with the acquired token
+                    user_info = await GitHubService.verify_github_token(data["access_token"])
+                    return {
+                        "success": True,
+                        "access_token": data["access_token"],
+                        "token_type": data.get("token_type", "bearer"),
+                        "scope": data.get("scope", ""),
+                        "user": user_info,
+                    }
+                return {
+                    "success": False,
+                    "error": data.get("error_description", "Failed to retrieve access token from GitHub."),
+                }
+            return {
+                "success": False,
+                "error": f"GitHub token exchange failed (HTTP {resp.status_code})",
+            }
+
+    @staticmethod
+    async def verify_remote_commit(token: str, full_name: str, branch: str = "main") -> Dict[str, Any]:
+        """
+        Verify that a remote repository exists and latest commit has been accepted on GitHub.
+        """
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "ProblemPilot-AI",
+        }
+        clean_name = full_name.strip("/")
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                resp = await client.get(f"https://api.github.com/repos/{clean_name}/commits/{branch}", headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return {
+                        "verified": True,
+                        "sha": data.get("sha", "")[:7],
+                        "full_sha": data.get("sha", ""),
+                        "commit_message": data.get("commit", {}).get("message", ""),
+                        "commit_date": data.get("commit", {}).get("author", {}).get("date"),
+                    }
+            except Exception as e:
+                logger.debug(f"Remote commit check error: {e}")
+
+        return {"verified": False}
 

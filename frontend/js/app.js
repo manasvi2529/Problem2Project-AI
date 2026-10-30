@@ -1358,36 +1358,129 @@ const App = {
             <div class="page-header">
                 <div>
                     <h1 class="page-title">Integrations & System Health</h1>
-                    <p class="page-subtitle">Status of AI providers, live data scrapers, GitHub authentication, and cloud deployment targets.</p>
+                    <p class="page-subtitle">Real-time status of AI providers, live data scrapers, GitHub authentication, and cloud deployment targets.</p>
                 </div>
             </div>
-
-            <div class="integrations-grid">
-                <div class="glass-card stat-card">
-                    <h3>FastAPI Core Engine</h3>
-                    <div class="stat-value text-success">Healthy</div>
-                    <span class="text-muted text-sm">Async ASGI with SQLite / SQLAlchemy</span>
-                </div>
-
-                <div class="glass-card stat-card">
-                    <h3>Data Science & NLP Pipeline</h3>
-                    <div class="stat-value text-primary">Pandas + Sklearn</div>
-                    <span class="text-muted text-sm">TF-IDF clustering & Pain index active</span>
-                </div>
-
-                <div class="glass-card stat-card">
-                    <h3>GitHub Remote Integration</h3>
-                    <div class="stat-value text-info">REST API Ready</div>
-                    <span class="text-muted text-sm">Personal Access Token & OAuth sync</span>
-                </div>
-
-                <div class="glass-card stat-card">
-                    <h3>Cloud Deployment Targets</h3>
-                    <div class="stat-value text-purple">Vercel & Render</div>
-                    <span class="text-muted text-sm">Automated manifest generation active</span>
-                </div>
-            </div>
+            <div class="loading-state"><div class="spinner"></div><p>Querying integration providers...</p></div>
         `;
+
+        try {
+            const status = await API.getIntegrationsStatus();
+            const ai = status.ai || {};
+            const gh = status.github || {};
+            const cloud = status.cloud || {};
+            const vercel = cloud.vercel || {};
+            const render = cloud.render || {};
+
+            container.innerHTML = `
+                <div class="page-header">
+                    <div>
+                        <h1 class="page-title">Integrations & System Health</h1>
+                        <p class="page-subtitle">Real-time status of AI providers, live data scrapers, GitHub authentication, and cloud deployment targets.</p>
+                    </div>
+                </div>
+
+                <div class="integrations-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 24px;">
+                    <div class="glass-card stat-card">
+                        <h3>AI Provider</h3>
+                        <div class="stat-value ${ai.configured ? 'text-success' : 'text-warning'}">${ai.configured ? 'Connected' : 'Offline / Autonomous'}</div>
+                        <span class="text-muted text-sm">Provider: ${ai.provider || 'openrouter'} (${ai.model || 'default'})</span>
+                    </div>
+
+                    <div class="glass-card stat-card">
+                        <h3>GitHub OAuth & Git</h3>
+                        <div class="stat-value ${gh.connected ? 'text-success' : (gh.oauth_enabled ? 'text-info' : 'text-muted')}">
+                            ${gh.connected ? `@${gh.username}` : (gh.oauth_enabled ? 'OAuth Ready' : 'PAT Token')}
+                        </div>
+                        <span class="text-muted text-sm">${gh.connected ? `Connected: ${gh.connected_at ? new Date(gh.connected_at).toLocaleDateString() : 'Active'}` : 'Private repo sync & automated commits'}</span>
+                    </div>
+
+                    <div class="glass-card stat-card">
+                        <h3>Vercel Cloud Deploy</h3>
+                        <div class="stat-value ${vercel.configured ? 'text-success' : 'text-purple'}">${vercel.configured ? 'API Connected' : 'Manifests Active'}</div>
+                        <span class="text-muted text-sm">${vercel.expected_cost || 'Free Tier ($0/mo)'}</span>
+                    </div>
+
+                    <div class="glass-card stat-card">
+                        <h3>Render Cloud Deploy</h3>
+                        <div class="stat-value ${render.configured ? 'text-success' : 'text-purple'}">${render.configured ? 'API Connected' : 'Manifests Active'}</div>
+                        <span class="text-muted text-sm">${render.expected_cost || 'Free Tier ($0/mo)'}</span>
+                    </div>
+                </div>
+
+                <div class="glass-card" style="margin-bottom: 20px;">
+                    <h3>GitHub Account Connection</h3>
+                    <p class="text-muted text-sm" style="margin: 8px 0 16px;">
+                        Connect your GitHub account securely to publish projects, create private repositories, and push verified code without pasting personal access tokens into chat.
+                    </p>
+                    ${gh.connected ? `
+                        <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); padding: 14px 18px; border-radius: 8px;">
+                            <div>
+                                <span style="font-weight: 600; color: #10b981;">✓ Connected as GitHub User:</span> <code>${gh.username}</code>
+                            </div>
+                            <button class="btn btn-secondary btn-sm" id="btn-disconnect-github">Disconnect</button>
+                        </div>
+                    ` : `
+                        <div style="display: flex; gap: 12px; align-items: center;">
+                            <button class="btn btn-primary" id="btn-connect-github">Connect GitHub Account</button>
+                            <span class="text-muted text-sm">OAuth 2.0 with CSRF protection</span>
+                        </div>
+                    `}
+                </div>
+
+                <div class="glass-card">
+                    <h3>Cloud Deployment Providers</h3>
+                    <p class="text-muted text-sm" style="margin: 8px 0 16px;">
+                        Every generated project automatically receives production cloud deployment configurations.
+                    </p>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                        <div style="padding: 16px; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.2);">
+                            <h4>Vercel</h4>
+                            <p class="text-muted text-sm" style="margin: 6px 0 10px;">${vercel.description || 'FastAPI serverless + HTML5 static assets'}</p>
+                            <div class="badge badge-info">${vercel.expected_cost || 'Free Tier'}</div>
+                        </div>
+                        <div style="padding: 16px; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.2);">
+                            <h4>Render</h4>
+                            <p class="text-muted text-sm" style="margin: 6px 0 10px;">${render.description || 'Containerized web service'}</p>
+                            <div class="badge badge-info">${render.expected_cost || 'Free Tier'}</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Attach event listeners
+            const connectBtn = document.getElementById('btn-connect-github');
+            if (connectBtn) {
+                connectBtn.addEventListener('click', async () => {
+                    try {
+                        const res = await API.authorizeGitHub();
+                        if (res.auth_url) {
+                            window.location.href = res.auth_url;
+                        } else {
+                            alert(res.error || 'GitHub OAuth credentials not configured in backend.');
+                        }
+                    } catch (e) {
+                        alert('Could not start GitHub authorization: ' + e.message);
+                    }
+                });
+            }
+
+            const disconnectBtn = document.getElementById('btn-disconnect-github');
+            if (disconnectBtn) {
+                disconnectBtn.addEventListener('click', async () => {
+                    if (confirm('Disconnect GitHub account from your profile?')) {
+                        try {
+                            await API.disconnectGitHub();
+                            this.renderIntegrations(container);
+                        } catch (e) {
+                            alert('Disconnect failed: ' + e.message);
+                        }
+                    }
+                });
+            }
+        } catch (err) {
+            container.innerHTML = `<div class="error-banner">Failed loading integrations: ${this.escapeHtml(err.message)}</div>`;
+        }
     },
 
     escapeHtml(str) {

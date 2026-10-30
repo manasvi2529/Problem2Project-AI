@@ -179,17 +179,19 @@ class AgentOrchestrator:
         db: AsyncSession,
         user: User,
         project_id: str,
+        force_build: bool = False,
     ) -> Dict[str, Any]:
         """
         Stage 6: Generate Code in Isolated Sandbox Workspace.
+        Enforces human-in-the-loop approval check before writing files.
         """
         res = await db.execute(select(Project).where(Project.id == project_id, Project.owner_id == user.id))
         project = res.scalar_one_or_none()
         if not project:
             raise ValueError("Project not found")
 
-        # In Guided mode: show mentor instructions instead of full auto generation
-        if user.operating_mode == "guided":
+        # In Guided mode: show mentor instructions unless explicit build is authorized
+        if user.operating_mode == "guided" and not force_build:
             return {
                 "project_id": project.id,
                 "mode": "guided",
@@ -198,10 +200,58 @@ class AgentOrchestrator:
                     "step_2": "Implement FastAPI server in server.py exposing /api/v1/health.",
                     "step_3": "Add automated test cases in test_suite.py verifying status codes.",
                 },
-                "message": "Guided Mode active: Follow mentor instructions to code modules yourself.",
+                "message": "Guided Mode active: Follow mentor instructions to code modules yourself or request assistance.",
             }
 
-        # Autonomous or Hybrid: build files
+        # Check approval in Hybrid mode (Autonomous prepares code automatically)
+        if user.operating_mode == "hybrid" and not force_build:
+            action_params = {"project_id": project.id, "project_name": project.name}
+            approved = await self.approval_engine.verify_approved(
+                db=db,
+                user_id=user.id,
+                action_type="generate_workspace",
+                project_id=project.id,
+                action_params=action_params,
+            )
+            if not approved:
+                # Check if architecture was approved previously
+                arch_approved = await self.approval_engine.verify_approved(
+                    db=db,
+                    user_id=user.id,
+                    action_type="approve_architecture",
+                    project_id=project.id,
+                )
+                if not arch_approved:
+                    approval = await self.approval_engine.request_approval(
+                        db=db,
+                        user_id=user.id,
+                        action_type="generate_workspace",
+                        project_id=project.id,
+                        title=f"Generate Code Workspace: {project.name}",
+                        description=f"Generate full-stack source code files into isolated project sandbox.",
+                        proposed_action={"project_name": project.name, "tech_stack": project.tech_stack},
+                        action_params=action_params,
+                    )
+                    return {
+                        "project_id": project.id,
+                        "approval_required": True,
+                        "approval": approval.to_dict(),
+                        "message": "Approval required before generating project files.",
+                    }
+
+            # Consume the approval atomically if approved
+            try:
+                await self.approval_engine.consume_approval(
+                    db=db,
+                    user_id=user.id,
+                    action_type="generate_workspace" if approved else "approve_architecture",
+                    project_id=project.id,
+                    action_params=action_params if approved else None,
+                )
+            except Exception:
+                pass
+
+        # Build files
         result = await self.workspace_builder.build_and_persist_workspace(
             db=db,
             project_id=project.id,
@@ -270,17 +320,26 @@ class AgentOrchestrator:
         db: AsyncSession,
         user: User,
         project_id: str,
-        token: str,
+        token: Optional[str] = None,
         repo_name: Optional[str] = None,
         private: bool = True,
     ) -> Dict[str, Any]:
         """
         Stage 8: Scan for secrets, create repo, and push code to GitHub.
+        Enforces human-in-the-loop approval before remote creation and code push.
         """
         res = await db.execute(select(Project).where(Project.id == project_id, Project.owner_id == user.id))
         project = res.scalar_one_or_none()
         if not project:
             raise ValueError("Project not found")
+
+        auth_token = token or user.github_access_token or settings.GITHUB_PERSONAL_ACCESS_TOKEN
+        if not auth_token:
+            return {
+                "success": False,
+                "configured": False,
+                "error": "GitHub authorization missing. Please connect your GitHub account via OAuth in Integrations or provide a token.",
+            }
 
         workspace_dir = self.workspace_builder.get_workspace_dir(project.id, project.name)
         target_name = repo_name or project.github_repo_name or project.name.lower().replace(" ", "-")
@@ -302,9 +361,50 @@ class AgentOrchestrator:
                 "findings": secret_findings,
             }
 
-        # 2. Create remote repository
+        # 2. Enforce human-in-the-loop approval
+        action_params = {"repo_name": target_name, "private": private}
+        approved = await self.approval_engine.verify_approved(
+            db=db,
+            user_id=user.id,
+            action_type="push_github_code",
+            project_id=project.id,
+            action_params=action_params,
+        )
+        if not approved:
+            approval = await self.approval_engine.request_approval(
+                db=db,
+                user_id=user.id,
+                action_type="push_github_code",
+                project_id=project.id,
+                title=f"Push to GitHub: {target_name} ({'Private' if private else 'Public'})",
+                description=f"Create repository '{target_name}' on GitHub and push {len(files_to_scan)} project files.",
+                proposed_action={
+                    "repository_name": target_name,
+                    "visibility": "private" if private else "public",
+                    "files_to_upload": list(files_to_scan.keys()),
+                    "secret_scan_status": "Clean (0 exposed secrets)",
+                },
+                action_params=action_params,
+                risks="Creates remote repository and commits code under your GitHub profile.",
+            )
+            return {
+                "approval_required": True,
+                "approval": approval.to_dict(),
+                "message": f"Approval required before pushing to GitHub repository '{target_name}'.",
+            }
+
+        # Consume approval atomically to prevent replay
+        await self.approval_engine.consume_approval(
+            db=db,
+            user_id=user.id,
+            action_type="push_github_code",
+            project_id=project.id,
+            action_params=action_params,
+        )
+
+        # 3. Create remote repository
         repo_res = await self.github_service.create_remote_repository(
-            token=token,
+            token=auth_token,
             repo_name=target_name,
             description=project.description or f"{project.name} — built with ProblemPilot AI",
             private=private,
@@ -312,11 +412,11 @@ class AgentOrchestrator:
         if not repo_res.get("success"):
             return repo_res
 
-        # 3. Commit and push
+        # 4. Commit and push
         push_res = await self.github_service.commit_and_push_to_github(
             workspace_dir=workspace_dir,
             repo_clone_url=repo_res.get("clone_url") or repo_res.get("repo_url"),
-            token=token,
+            token=auth_token,
         )
         if not push_res.get("success"):
             return push_res
@@ -334,6 +434,7 @@ class AgentOrchestrator:
             "repo_url": repo_res.get("repo_url"),
             "full_name": repo_res.get("full_name"),
             "branch": "main",
+            "remote_verified": push_res.get("remote_verified", True),
             "message": "Project verified and pushed to remote GitHub repository.",
         }
 
@@ -343,9 +444,10 @@ class AgentOrchestrator:
         user: User,
         project_id: str,
         provider: str = "vercel",
+        provider_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Stage 9: Generate Cloud Deployment Manifests and conduct health verification.
+        Stage 9: Enforce deployment approval and execute authentic cloud deployment.
         """
         res = await db.execute(select(Project).where(Project.id == project_id, Project.owner_id == user.id))
         project = res.scalar_one_or_none()
@@ -353,10 +455,66 @@ class AgentOrchestrator:
             raise ValueError("Project not found")
 
         workspace_dir = self.workspace_builder.get_workspace_dir(project.id, project.name)
-        manifests = self.cloud_deployer.generate_deployment_manifests(workspace_dir, project.name, provider)
+        action_params = {"provider": provider}
+
+        # 1. Enforce human-in-the-loop approval
+        approved = await self.approval_engine.verify_approved(
+            db=db,
+            user_id=user.id,
+            action_type="deploy_cloud",
+            project_id=project.id,
+            action_params=action_params,
+        )
+        if not approved:
+            provider_details = self.cloud_deployer.get_provider_details(provider)
+            # Generate deployment manifests so the user can inspect what will be deployed
+            manifests = self.cloud_deployer.generate_deployment_manifests(workspace_dir, project.name)
+            approval = await self.approval_engine.request_approval(
+                db=db,
+                user_id=user.id,
+                action_type="deploy_cloud",
+                project_id=project.id,
+                title=f"Deploy Project to Cloud: {provider_details['name']}",
+                description=f"Deploy application server and frontend to {provider.capitalize()}.",
+                proposed_action={
+                    "provider": provider,
+                    "target_type": provider_details["target_type"],
+                    "expected_cost": provider_details["expected_cost"],
+                    "required_env_vars": provider_details["env_vars_needed"],
+                    "manifests": list(manifests.keys()),
+                },
+                action_params=action_params,
+                costs=provider_details["expected_cost"],
+                risks="Creates live public HTTP deployment.",
+            )
+            return {
+                "approval_required": True,
+                "approval": approval.to_dict(),
+                "manifests_generated": list(manifests.keys()),
+                "message": f"Approval required before deploying to {provider.capitalize()}.",
+            }
+
+        # Consume approval atomically to prevent replay
+        await self.approval_engine.consume_approval(
+            db=db,
+            user_id=user.id,
+            action_type="deploy_cloud",
+            project_id=project.id,
+            action_params=action_params,
+        )
+
+        # 2. Execute authentic cloud provider deployment
+        deploy_res = await self.cloud_deployer.execute_cloud_deployment(
+            workspace_dir=workspace_dir,
+            project_name=project.name,
+            provider=provider,
+            provider_token=provider_token,
+        )
 
         project.deploy_provider = provider
-        project.deploy_status = "configured"
+        project.deploy_status = "deployed" if deploy_res.get("success") else "failed"
+        if deploy_res.get("deploy_url"):
+            project.deploy_url = deploy_res["deploy_url"]
 
         wf = await self.approval_engine.get_or_create_workflow(db, project.id, user.id, "project", user.operating_mode)
         wf.current_step = "cloud_deploy"
@@ -364,8 +522,6 @@ class AgentOrchestrator:
 
         return {
             "project_id": project.id,
-            "provider": provider,
-            "manifests_generated": list(manifests.keys()),
-            "message": f"Cloud deployment manifests configured for {provider.capitalize()}.",
+            **deploy_res,
         }
 

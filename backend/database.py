@@ -37,10 +37,32 @@ async def get_db() -> AsyncSession:
 
 
 async def init_db():
-    """Create all tables and seed default workspace user on startup."""
+    """Create all tables, migrate schema additions, and seed default workspace user on startup."""
     async with engine.begin() as conn:
         from backend.models import user, project, research, approval, audit  # noqa
         await conn.run_sync(Base.metadata.create_all)
+
+        # Automatic lightweight schema migration for existing SQLite databases
+        def _migrate_schema(connection):
+            try:
+                # Check approvals table columns
+                res = connection.exec_driver_sql("PRAGMA table_info(approvals)").fetchall()
+                approval_cols = {row[1] for row in res}
+                new_approval_cols = [
+                    ("expires_at", "DATETIME"),
+                    ("consumed", "BOOLEAN DEFAULT 0"),
+                    ("consumed_at", "DATETIME"),
+                    ("action_params", "JSON"),
+                    ("action_params_hash", "VARCHAR(64)"),
+                ]
+                for col_name, col_type in new_approval_cols:
+                    if col_name not in approval_cols:
+                        connection.exec_driver_sql(f"ALTER TABLE approvals ADD COLUMN {col_name} {col_type}")
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning("Schema migration warning: %s", e)
+
+        await conn.run_sync(_migrate_schema)
 
     # Seed default developer user for zero-friction access
     async with AsyncSessionLocal() as session:

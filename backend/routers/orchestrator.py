@@ -30,7 +30,7 @@ class PromptJourneyRequest(BaseModel):
     prompt: str = Field(..., min_length=3, max_length=1000)
 
 class BuildWorkspaceRequest(BaseModel):
-    pass
+    force_build: Optional[bool] = False
 
 class TestWorkspaceRequest(BaseModel):
     pass
@@ -41,12 +41,13 @@ class TeachRequest(BaseModel):
     level: Optional[str] = "intermediate"
 
 class GitHubSyncRequest(BaseModel):
-    token: str
+    token: Optional[str] = None
     repository_name: Optional[str] = None
     private: Optional[bool] = True
 
 class CloudDeployRequest(BaseModel):
     provider: Optional[str] = "vercel"
+    provider_token: Optional[str] = None
     verify_url: Optional[str] = None
 
 
@@ -89,12 +90,14 @@ async def generate_blueprint(
 @router.post("/projects/{project_id}/build")
 async def build_project_workspace(
     project_id: str,
+    body: Optional[BuildWorkspaceRequest] = None,
     user: User = Depends(get_user_from_token),
     db: AsyncSession = Depends(get_db),
 ):
     """Generate actual full-stack source code into isolated project sandbox."""
     try:
-        return await orchestrator.build_workspace_stage(db, user, project_id)
+        force = body.force_build if body else False
+        return await orchestrator.build_workspace_stage(db, user, project_id, force_build=force)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -123,11 +126,30 @@ async def teach_concept(
     user: User = Depends(get_user_from_token),
     db: AsyncSession = Depends(get_db),
 ):
-    """AI Teacher explanation for any file, tech, or architecture choice."""
+    """AI Teacher explanation grounded in actual project code, architecture, and interview prep."""
+    res = await db.execute(select(Project).where(Project.id == project_id, Project.owner_id == user.id))
+    project = res.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Load actual workspace files if available
+    workspace_dir = orchestrator.workspace_builder.get_workspace_dir(project.id, project.name)
+    files_context = {}
+    if workspace_dir.exists():
+        for p in workspace_dir.glob("*"):
+            if p.is_file() and not p.name.startswith(".git") and p.name != ".env":
+                try:
+                    files_context[p.name] = p.read_text(encoding="utf-8", errors="ignore")[:600]
+                except Exception:
+                    pass
+
+    context = body.context or f"Project '{project.name}': {project.description or ''}"
     explanation = await teacher.explain_concept(
         topic=body.topic,
-        context=body.context or "",
+        context=context,
         level=body.level or "intermediate",
+        project_name=project.name,
+        files_context=files_context,
     )
     return {"explanation": explanation}
 
@@ -148,7 +170,7 @@ async def sync_github(
         repo_name=body.repository_name,
         private=bool(body.private),
     )
-    if not result.get("success"):
+    if not result.get("success") and not result.get("approval_required"):
         raise HTTPException(status_code=400, detail=result.get("error", "GitHub sync failed"))
     return result
 
@@ -160,12 +182,13 @@ async def deploy_cloud(
     user: User = Depends(get_user_from_token),
     db: AsyncSession = Depends(get_db),
 ):
-    """Generate cloud deployment manifests (Vercel/Render) and conduct verification."""
+    """Enforce deployment approval and execute authentic cloud deployment."""
     result = await orchestrator.deploy_cloud_stage(
         db=db,
         user=user,
         project_id=project_id,
         provider=body.provider or "vercel",
+        provider_token=body.provider_token,
     )
     if body.verify_url:
         probe = await orchestrator.cloud_deployer.verify_remote_deployment(body.verify_url)

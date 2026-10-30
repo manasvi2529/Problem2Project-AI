@@ -36,6 +36,9 @@ async def list_approvals(
     db: AsyncSession = Depends(get_db),
 ):
     """List approval requests for the current user."""
+    from backend.services.approval_engine import ApprovalEngine
+    await ApprovalEngine.expire_pending_approvals(db)
+
     query = select(Approval).where(Approval.owner_id == user.id)
     if status:
         query = query.where(Approval.decision == status)
@@ -52,15 +55,20 @@ async def list_pending_approvals(
     db: AsyncSession = Depends(get_db),
 ):
     """Get all pending approval requests."""
+    from backend.services.approval_engine import ApprovalEngine
+    await ApprovalEngine.expire_pending_approvals(db)
+
     result = await db.execute(
         select(Approval)
         .where(Approval.owner_id == user.id, Approval.decision == "pending")
         .order_by(Approval.created_at.desc())
     )
     approvals = result.scalars().all()
+    # Filter out any that expired right now
+    active_pending = [a for a in approvals if not a.is_expired]
     return {
-        "pending_count": len(approvals),
-        "approvals": [a.to_dict() for a in approvals],
+        "pending_count": len(active_pending),
+        "approvals": [a.to_dict() for a in active_pending],
     }
 
 
@@ -76,6 +84,11 @@ async def get_approval(
     approval = result.scalar_one_or_none()
     if not approval:
         raise HTTPException(status_code=404, detail="Approval not found")
+    
+    if approval.decision == "pending" and approval.is_expired:
+        approval.decision = "expired"
+        await db.commit()
+
     return {"approval": approval.to_dict()}
 
 
@@ -94,6 +107,11 @@ async def decide_approval(
     approval = result.scalar_one_or_none()
     if not approval:
         raise HTTPException(status_code=404, detail="Approval not found")
+
+    if approval.is_expired:
+        approval.decision = "expired"
+        await db.commit()
+        raise HTTPException(status_code=410, detail="Approval request has expired and can no longer be decided.")
 
     if approval.decision != "pending":
         raise HTTPException(status_code=409, detail=f"Approval already decided: {approval.decision}")

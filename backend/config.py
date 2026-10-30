@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     GITHUB_REDIRECT_URI: str = "http://localhost:8000/api/integrations/github/callback"
     GITHUB_PERSONAL_ACCESS_TOKEN: Optional[str] = None
 
+    # Cloud Hosting Providers
+    VERCEL_TOKEN: Optional[str] = None
+    VERCEL_TEAM_ID: Optional[str] = None
+    RENDER_API_KEY: Optional[str] = None
+    RENDER_SERVICE_ID: Optional[str] = None
+
     # Execution & Isolation
     EXECUTION_TIMEOUT_SECONDS: int = 30
     EXECUTION_MAX_RETRIES: int = 3
@@ -94,6 +100,14 @@ class Settings(BaseSettings):
             (self.GITHUB_CLIENT_ID and self.GITHUB_CLIENT_SECRET)
             or self.GITHUB_PERSONAL_ACCESS_TOKEN
         )
+
+    @property
+    def vercel_configured(self) -> bool:
+        return bool(self.VERCEL_TOKEN and self.VERCEL_TOKEN not in ("your-vercel-token-here", ""))
+
+    @property
+    def render_configured(self) -> bool:
+        return bool(self.RENDER_API_KEY and self.RENDER_API_KEY not in ("your-render-api-key-here", ""))
 
 
 settings = Settings()

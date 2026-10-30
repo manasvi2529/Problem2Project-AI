@@ -347,6 +347,21 @@ const API = {
         return await this.request(`/api/orchestrator/projects/${encodeURIComponent(projectId)}/files`);
     },
 
+    // ── Integrations ──────────────────────────────────────────────────────
+    async getIntegrationsStatus() {
+        return await this.request('/api/integrations/status');
+    },
+
+    async authorizeGitHub() {
+        return await this.request('/api/integrations/github/authorize');
+    },
+
+    async disconnectGitHub() {
+        return await this.request('/api/integrations/github', {
+            method: 'DELETE',
+        });
+    },
+
     // ── Health & System ────────────────────────────────────────────────────
     async getHealth() {
         return await this.request('/api/health');

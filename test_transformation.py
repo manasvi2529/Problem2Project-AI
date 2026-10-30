@@ -193,8 +193,140 @@ async def run_all_tests():
         assert adv_res.json()["current_stage"] == "execution"
         logger.info("✓ Workflow stage advanced to 'execution'")
 
+        # ── 11. Critical Approval Gate & Replay Prevention Tests ───────────
+        logger.info("\n=== 11. Testing Critical Approval Security Gates & Replay Prevention ===")
+        from backend.services.approval_engine import ApprovalEngine
+        from datetime import timedelta
+
+        async with AsyncSessionLocal() as session:
+            test_user_id = reg_data["user"]["id"]
+            
+            # 1. Pending approval cannot be consumed
+            appr1 = await ApprovalEngine.request_approval(
+                db=session,
+                user_id=test_user_id,
+                action_type="deploy_cloud",
+                project_id=project_id,
+                action_params={"provider": "vercel"},
+            )
+            is_valid = await ApprovalEngine.verify_approved(
+                db=session,
+                user_id=test_user_id,
+                action_type="deploy_cloud",
+                project_id=project_id,
+                action_params={"provider": "vercel"},
+            )
+            assert is_valid is None, "Pending approval must not be verified as approved"
+            logger.info("✓ Test Passed: Pending approval cannot execute")
+
+            # 2. Rejected approval cannot be consumed
+            await ApprovalEngine.reject_approval(session, test_user_id, appr1.id, "Testing rejection")
+            is_valid_rej = await ApprovalEngine.verify_approved(
+                db=session,
+                user_id=test_user_id,
+                action_type="deploy_cloud",
+                project_id=project_id,
+            )
+            assert is_valid_rej is None, "Rejected approval must not execute"
+            logger.info("✓ Test Passed: Rejected approval cannot execute")
+
+            # 3. Expired approval cannot be consumed
+            appr_exp = await ApprovalEngine.request_approval(
+                db=session,
+                user_id=test_user_id,
+                action_type="push_github_code",
+                project_id=project_id,
+                action_params={"repo": "test-repo"},
+            )
+            appr_exp.decision = "approved"
+            appr_exp.expires_at = datetime.now(timezone.utc) - timedelta(hours=2)
+            await session.commit()
+
+            is_valid_exp = await ApprovalEngine.verify_approved(
+                db=session,
+                user_id=test_user_id,
+                action_type="push_github_code",
+                project_id=project_id,
+                action_params={"repo": "test-repo"},
+            )
+            assert is_valid_exp is None, "Expired approval must not execute"
+            logger.info("✓ Test Passed: Expired approval cannot execute")
+
+            # 4. Approval for another project cannot execute
+            appr_proj_a = await ApprovalEngine.request_approval(
+                db=session,
+                user_id=test_user_id,
+                action_type="generate_workspace",
+                project_id="project-AAA",
+            )
+            appr_proj_a.decision = "approved"
+            await session.commit()
+
+            is_valid_cross_proj = await ApprovalEngine.verify_approved(
+                db=session,
+                user_id=test_user_id,
+                action_type="generate_workspace",
+                project_id="project-BBB",
+            )
+            assert is_valid_cross_proj is None, "Approval for Project A cannot execute on Project B"
+            logger.info("✓ Test Passed: Cross-project approval leakage prevented")
+
+            # 5. Changed action parameters invalidate the approval
+            appr_params = await ApprovalEngine.request_approval(
+                db=session,
+                user_id=test_user_id,
+                action_type="deploy_cloud",
+                project_id=project_id,
+                action_params={"env": "staging", "tier": "free"},
+            )
+            appr_params.decision = "approved"
+            await session.commit()
+
+            # Attempting to verify with altered parameters (e.g. env: production)
+            is_valid_tampered = await ApprovalEngine.verify_approved(
+                db=session,
+                user_id=test_user_id,
+                action_type="deploy_cloud",
+                project_id=project_id,
+                action_params={"env": "production", "tier": "enterprise"},
+            )
+            assert is_valid_tampered is None, "Altered action parameters must invalidate approval"
+            logger.info("✓ Test Passed: Action parameter binding prevents tampering")
+
+            # 6. Replay prevention: consumption invalidates subsequent execution
+            consumed = await ApprovalEngine.consume_approval(
+                db=session,
+                user_id=test_user_id,
+                action_type="deploy_cloud",
+                project_id=project_id,
+                action_params={"env": "staging", "tier": "free"},
+            )
+            assert consumed.consumed is True, "Approval must be marked consumed"
+
+            # Attempt duplicate replay
+            try:
+                await ApprovalEngine.consume_approval(
+                    db=session,
+                    user_id=test_user_id,
+                    action_type="deploy_cloud",
+                    project_id=project_id,
+                    action_params={"env": "staging", "tier": "free"},
+                )
+                assert False, "Duplicate execution attempt must raise PermissionError"
+            except PermissionError:
+                logger.info("✓ Test Passed: Replay prevented (consumed approval cannot be reused)")
+
+        # ── 12. Integrations Status & Cloud Realism ─────────────────────────
+        logger.info("\n=== 12. Testing Integrations Status & Deployment Transparency ===")
+        integ_res = await client.get("/api/integrations/status", headers=auth_headers)
+        assert integ_res.status_code == 200
+        idata = integ_res.json()
+        assert "ai" in idata and "github" in idata and "cloud" in idata
+        assert "vercel" in idata["cloud"] and "render" in idata["cloud"]
+        logger.info("✓ GET /api/integrations/status verified with AI, GitHub, and Cloud status")
+
     logger.info("\n" + "=" * 60)
-    logger.info("🎉 ALL 10 TRANSFORMATION TEST SUITES PASSED WITH 100% SUCCESS!")
+    logger.info("🎉 ALL 12 TRANSFORMATION & APPROVAL SECURITY TEST SUITES PASSED WITH 100% SUCCESS!")
     logger.info("=" * 60)
 
 
