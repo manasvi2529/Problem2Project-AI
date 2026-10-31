@@ -214,8 +214,21 @@ class ApprovalEngine:
             )
 
         now = datetime.now(timezone.utc)
-        approval.consumed = True
-        approval.consumed_at = now
+        from sqlalchemy import update
+        stmt = (
+            update(Approval)
+            .where(
+                Approval.id == approval.id,
+                Approval.consumed.is_(False),
+                Approval.decision == "approved",
+            )
+            .values(consumed=True, consumed_at=now)
+        )
+        update_res = await db.execute(stmt)
+        if update_res.rowcount == 0:
+            raise PermissionError(
+                f"Approval {approval.id} has already been consumed or modified concurrently."
+            )
 
         log = AuditLog(
             user_id=user_id,

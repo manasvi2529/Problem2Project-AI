@@ -159,9 +159,9 @@ uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 
 Open your browser at: **`http://localhost:8000`**
 
-A default developer account is pre-seeded for zero-friction access:
-- **Email**: `developer@problempilot.ai`
-- **Password**: `ProblemPilot123!`
+Create your account directly in the browser or via the `/api/auth/register` API endpoint.
+- Register with your chosen email, username, and password.
+- Operating modes (Autonomous, Guided, Hybrid) can be selected in your profile settings.
 
 ---
 
@@ -169,13 +169,19 @@ A default developer account is pre-seeded for zero-friction access:
 
 Run the automated verification test suites:
 
-### 1. Complete GitHub OAuth & Vercel Cloud Deployment Tests
+### 1. Security, Operating Modes & Workspace Verification Tests
+```bash
+python test_security_modes_workspace.py
+```
+*Validates elimination of hardcoded credentials, operating mode transitions (Autonomous, Guided, Hybrid), single-use atomic approval engine replay prevention, recursive workspace file tree discovery, and pre-push 0-file protection.*
+
+### 2. Complete GitHub OAuth & Vercel Cloud Deployment Tests
 ```bash
 python test_integrations_complete.py
 ```
 *Validates token encryption at rest, HMAC CSRF state validation, pre-push secret scanning, GitHub OAuth callbacks, Vercel token verification, project structure detection, deployment polling, health checks, approval replay protection, and deployment audit history.*
 
-### 2. Complete 12-Milestone Platform Transformation Tests
+### 3. Complete 12-Milestone Platform Transformation Tests
 ```bash
 python test_transformation.py
 ```

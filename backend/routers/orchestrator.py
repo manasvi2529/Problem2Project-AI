@@ -132,14 +132,21 @@ async def teach_concept(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Load actual workspace files if available
+    # Load actual workspace files recursively if available
     workspace_dir = orchestrator.workspace_builder.get_workspace_dir(project.id, project.name)
     files_context = {}
+    EXCLUDE_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".pytest_cache"}
     if workspace_dir.exists():
-        for p in workspace_dir.glob("*"):
-            if p.is_file() and not p.name.startswith(".git") and p.name != ".env":
+        for p in workspace_dir.rglob("*"):
+            if p.is_file():
+                rel = p.relative_to(workspace_dir)
+                parts = set(rel.parts)
+                if parts & EXCLUDE_DIRS or any(part.startswith(".") for part in parts if part != ".gitignore"):
+                    continue
+                if p.name.startswith(".env") or p.suffix in (".pyc", ".log", ".pem", ".key"):
+                    continue
                 try:
-                    files_context[p.name] = p.read_text(encoding="utf-8", errors="ignore")[:600]
+                    files_context[rel.as_posix()] = p.read_text(encoding="utf-8", errors="ignore")[:600]
                 except Exception:
                     pass
 
@@ -210,15 +217,22 @@ async def get_workspace_files(
 
     workspace_dir = orchestrator.workspace_builder.get_workspace_dir(project.id, project.name)
     files = []
+    EXCLUDE_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".pytest_cache"}
     if workspace_dir.exists():
-        for p in workspace_dir.glob("*"):
-            if p.is_file() and not p.name.startswith(".git"):
+        for p in workspace_dir.rglob("*"):
+            if p.is_file():
+                rel = p.relative_to(workspace_dir)
+                parts = set(rel.parts)
+                if parts & EXCLUDE_DIRS or any(part.startswith(".") for part in parts if part != ".gitignore"):
+                    continue
+                if p.name.startswith(".env") or p.suffix in (".pyc", ".log", ".pem", ".key"):
+                    continue
                 try:
                     content = p.read_text(encoding="utf-8", errors="ignore")
                     ext = p.suffix.lstrip(".")
                     files.append({
                         "name": p.name,
-                        "path": p.name,
+                        "path": rel.as_posix(),
                         "extension": ext,
                         "size_bytes": p.stat().st_size,
                         "content": content,

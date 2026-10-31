@@ -64,26 +64,11 @@ async def init_db():
                 user_cols = {row[1] for row in user_res}
                 if "github_oauth_state" not in user_cols:
                     connection.exec_driver_sql("ALTER TABLE users ADD COLUMN github_oauth_state VARCHAR(150)")
+
+                # Remove legacy hardcoded development user from disk database
+                connection.exec_driver_sql("DELETE FROM users WHERE email = 'developer@problempilot.ai' AND id = 'default-dev-user-0001'")
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).warning("Schema migration warning: %s", e)
 
         await conn.run_sync(_migrate_schema)
-
-    # Seed default developer user for zero-friction access
-    async with AsyncSessionLocal() as session:
-        from backend.models.user import User
-        from backend.security import hash_password
-        from sqlalchemy import select
-        res = await session.execute(select(User).where(User.email == "developer@problempilot.ai"))
-        if not res.scalar_one_or_none():
-            dev_user = User(
-                id="default-dev-user-0001",
-                email="developer@problempilot.ai",
-                username="developer",
-                hashed_password=hash_password("ProblemPilot123!"),
-                full_name="Principal Architect",
-                operating_mode="hybrid",
-            )
-            session.add(dev_user)
-            await session.commit()

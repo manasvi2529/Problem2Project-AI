@@ -46,26 +46,6 @@ const API = {
         }
 
         let token = this.getToken();
-        // If no token exists and not hitting auth endpoints, perform transparent developer sign-in
-        if (!token && !endpoint.includes('/auth/login') && !endpoint.includes('/auth/register')) {
-            try {
-                const autoResp = await fetch(`${this.baseUrl}/api/auth/login`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email: 'developer@problempilot.ai', password: 'ProblemPilot123!' }),
-                });
-                if (autoResp.ok) {
-                    const autoData = await autoResp.json();
-                    token = autoData.access_token || autoData.token;
-                    if (token) {
-                        this.setToken(token);
-                        this.setUser(autoData.user);
-                    }
-                }
-            } catch (e) {
-                // Ignore background auto-login errors and proceed
-            }
-        }
 
         if (token) {
             headers['Authorization'] = `Bearer ${token}`;
@@ -77,30 +57,7 @@ const API = {
         };
 
         try {
-            let resp = await fetch(url, config);
-            
-            // Handle 401 Unauthorized: attempt one automatic session restoration before failing
-            if (resp.status === 401 && !endpoint.includes('/auth/login') && !endpoint.includes('/auth/register')) {
-                try {
-                    const retryResp = await fetch(`${this.baseUrl}/api/auth/login`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ email: 'developer@problempilot.ai', password: 'ProblemPilot123!' }),
-                    });
-                    if (retryResp.ok) {
-                        const retryData = await retryResp.json();
-                        token = retryData.access_token || retryData.token;
-                        if (token) {
-                            this.setToken(token);
-                            this.setUser(retryData.user);
-                            headers['Authorization'] = `Bearer ${token}`;
-                            resp = await fetch(url, { ...options, headers });
-                        }
-                    }
-                } catch {
-                    // Fall through to 401 handler below
-                }
-            }
+            const resp = await fetch(url, config);
 
             if (resp.status === 401 && !endpoint.includes('/auth/login') && !endpoint.includes('/auth/register')) {
                 this.setToken(null);
@@ -303,9 +260,10 @@ const API = {
         });
     },
 
-    async buildWorkspace(projectId) {
+    async buildWorkspace(projectId, forceBuild = false) {
         return await this.request(`/api/orchestrator/projects/${encodeURIComponent(projectId)}/build`, {
             method: 'POST',
+            body: JSON.stringify({ force_build: forceBuild }),
         });
     },
 

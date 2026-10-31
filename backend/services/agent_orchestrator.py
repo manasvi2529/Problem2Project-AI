@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from backend.config import settings
 from backend.models.user import User
 from backend.models.project import Project, ProjectFile
 from backend.models.research import ResearchSession, ProblemCandidate, ResearchSource
@@ -239,17 +240,16 @@ class AgentOrchestrator:
                         "message": "Approval required before generating project files.",
                     }
 
-            # Consume the approval atomically if approved
-            try:
-                await self.approval_engine.consume_approval(
-                    db=db,
-                    user_id=user.id,
-                    action_type="generate_workspace" if approved else "approve_architecture",
-                    project_id=project.id,
-                    action_params=action_params if approved else None,
-                )
-            except Exception:
-                pass
+            # Consume the approval atomically
+            consume_action = "generate_workspace" if approved else "approve_architecture"
+            consume_params = action_params if approved else None
+            await self.approval_engine.consume_approval(
+                db=db,
+                user_id=user.id,
+                action_type=consume_action,
+                project_id=project.id,
+                action_params=consume_params,
+            )
 
         # Build files
         result = await self.workspace_builder.build_and_persist_workspace(
@@ -344,14 +344,30 @@ class AgentOrchestrator:
         workspace_dir = self.workspace_builder.get_workspace_dir(project.id, project.name)
         target_name = repo_name or project.github_repo_name or project.name.lower().replace(" ", "-")
 
-        # 1. Scan files for exposed secrets
+        # 1. Scan files recursively for exposed secrets
+        EXCLUDE_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".pytest_cache"}
+        MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB limit
         files_to_scan = {}
-        for p in workspace_dir.glob("*"):
-            if p.is_file() and not p.name.startswith(".git"):
-                try:
-                    files_to_scan[p.name] = p.read_text(encoding="utf-8", errors="ignore")
-                except Exception:
-                    pass
+        if workspace_dir.exists():
+            for p in workspace_dir.rglob("*"):
+                if p.is_file():
+                    rel = p.relative_to(workspace_dir)
+                    parts = set(rel.parts)
+                    if parts & EXCLUDE_DIRS or any(part.startswith(".") for part in parts if part != ".gitignore"):
+                        continue
+                    if p.name.startswith(".env") or p.suffix in (".pyc", ".log", ".pem", ".key"):
+                        continue
+                    try:
+                        if p.stat().st_size <= MAX_FILE_SIZE:
+                            files_to_scan[rel.as_posix()] = p.read_text(encoding="utf-8", errors="ignore")
+                    except Exception:
+                        pass
+
+        if not files_to_scan:
+            return {
+                "success": False,
+                "error": "Workspace has no source files to publish. Generate codebase first.",
+            }
 
         secret_findings = self.github_service.scan_files_for_secrets(files_to_scan)
         if secret_findings:

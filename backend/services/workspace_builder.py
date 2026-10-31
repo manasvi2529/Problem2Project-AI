@@ -753,7 +753,7 @@ env/
                     cwd=str(wdir),
                     capture_output=True,
                     text=True,
-                    timeout=20,
+                    timeout=45,
                 )
                 stdout_str = res.stdout or ""
                 stderr_str = res.stderr or ""

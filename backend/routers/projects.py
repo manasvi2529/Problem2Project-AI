@@ -226,9 +226,38 @@ async def get_project(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    file_list = [f.to_dict() for f in project.files]
+    if not file_list:
+        from backend.routers.orchestrator import orchestrator
+        workspace_dir = orchestrator.workspace_builder.get_workspace_dir(project.id, project.name)
+        EXCLUDE_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".pytest_cache"}
+        if workspace_dir.exists():
+            for p in workspace_dir.rglob("*"):
+                if p.is_file():
+                    rel = p.relative_to(workspace_dir)
+                    parts = set(rel.parts)
+                    if parts & EXCLUDE_DIRS or any(part.startswith(".") for part in parts if part != ".gitignore"):
+                        continue
+                    if p.name.startswith(".env") or p.suffix in (".pyc", ".log", ".pem", ".key"):
+                        continue
+                    try:
+                        content = p.read_text(encoding="utf-8", errors="ignore")
+                        ext = p.suffix.lstrip(".")
+                        file_list.append({
+                            "id": f"disk-{rel.as_posix()}",
+                            "project_id": project.id,
+                            "path": rel.as_posix(),
+                            "name": p.name,
+                            "language": ext,
+                            "size_bytes": p.stat().st_size,
+                            "content": content,
+                        })
+                    except Exception:
+                        pass
+
     return {
         "project": project.to_dict(),
-        "files": [f.to_dict() for f in project.files],
+        "files": file_list,
     }
 
 

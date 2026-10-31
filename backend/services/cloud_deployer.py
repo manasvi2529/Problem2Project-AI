@@ -431,18 +431,28 @@ services:
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/json",
                 }
-                # Collect files to upload
+                # Collect files recursively to upload
                 files_payload = []
-                for p in workspace_dir.glob("*"):
-                    if p.is_file() and not p.name.startswith(".git") and p.name != ".env":
-                        try:
-                            content = p.read_text(encoding="utf-8", errors="ignore")
-                            files_payload.append({
-                                "file": p.name,
-                                "data": content,
-                            })
-                        except Exception:
-                            pass
+                EXCLUDE_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".pytest_cache"}
+                MAX_FILE_SIZE = 5 * 1024 * 1024
+                if workspace_dir.exists():
+                    for p in workspace_dir.rglob("*"):
+                        if p.is_file():
+                            rel = p.relative_to(workspace_dir)
+                            parts = set(rel.parts)
+                            if parts & EXCLUDE_DIRS or any(part.startswith(".") for part in parts if part != ".gitignore"):
+                                continue
+                            if p.name.startswith(".env") or p.suffix in (".pyc", ".log", ".pem", ".key"):
+                                continue
+                            try:
+                                if p.stat().st_size <= MAX_FILE_SIZE:
+                                    content = p.read_text(encoding="utf-8", errors="ignore")
+                                    files_payload.append({
+                                        "file": rel.as_posix(),
+                                        "data": content,
+                                    })
+                            except Exception:
+                                pass
 
                 clean_name = "".join(c if c.isalnum() or c == "-" else "-" for c in project_name.lower())[:30].strip("-") or "problempilot-app"
                 deploy_body = {

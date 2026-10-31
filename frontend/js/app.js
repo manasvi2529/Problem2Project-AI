@@ -719,7 +719,17 @@ const App = {
         try {
             const res = await API.getProject(projectId);
             const p = res.project || res;
-            const files = res.files || [];
+            let files = res.files || [];
+            if (files.length === 0) {
+                try {
+                    const wsData = await API.getWorkspaceFiles(projectId);
+                    if (wsData && wsData.files && wsData.files.length > 0) {
+                        files = wsData.files;
+                    }
+                } catch {
+                    // Ignore workspace files fallback error
+                }
+            }
             const bp = p.blueprint || {};
 
             // Fetch workflow state and pending approvals
@@ -1036,15 +1046,37 @@ const App = {
                 this.showToast('Generating codebase in sandbox...', 'info');
                 try {
                     const buildRes = await API.buildWorkspace(projectId);
+                    if (buildRes.approval_required) {
+                        banner.className = 'glass-card mb-6 alert-box alert-warning';
+                        banner.innerHTML = `
+                            <strong>Human Approval Required:</strong><br>
+                            ${this.escapeHtml(buildRes.message || 'Authorization needed before generating source files.')}
+                            <div class="mt-3">
+                                <button class="btn btn-primary btn-sm" id="btn-approve-inline-build">✓ Authorize Code Generation</button>
+                            </div>
+                        `;
+                        banner.classList.remove('hidden');
+                        document.getElementById('btn-approve-inline-build')?.addEventListener('click', async () => {
+                            try {
+                                await API.respondApproval(buildRes.approval.id, 'approved', 'Authorized codebase build');
+                                this.showToast('Approved! Building codebase...', 'info');
+                                const forceRes = await API.buildWorkspace(projectId, true);
+                                banner.className = 'glass-card mb-6 alert-box alert-success';
+                                banner.innerHTML = `<strong>Codebase Generated:</strong> ${this.escapeHtml(forceRes.message || 'Files written')} (Location: <code>${forceRes.workspace_dir}</code>)`;
+                                this.renderProjectDetail(container, projectId);
+                            } catch (e) {
+                                this.showToast('Error generating codebase: ' + e.message, 'error');
+                            }
+                        });
+                        return;
+                    }
                     banner.className = 'glass-card mb-6 alert-box alert-success';
                     banner.innerHTML = `<strong>Codebase Generated:</strong> ${this.escapeHtml(buildRes.message)} (Location: <code>${buildRes.workspace_dir}</code>)`;
                     banner.classList.remove('hidden');
                     this.showToast('Codebase generated successfully!', 'success');
                     
-                    // Switch to Source Files tab
-                    const filesTabBtn = container.querySelector('.tab-btn[data-tab="tab-files"]');
-                    if (filesTabBtn) filesTabBtn.click();
-                    this.loadWorkspaceFiles(projectId);
+                    // Re-render project detail to show newly generated files
+                    this.renderProjectDetail(container, projectId);
                 } catch (err) {
                     this.showToast('Build error: ' + err.message, 'error');
                 }
@@ -1160,44 +1192,177 @@ const App = {
             });
 
             document.getElementById('btn-github-sync').addEventListener('click', async () => {
-                const token = prompt('Enter your GitHub Personal Access Token (repo scope):', '');
-                if (!token) return;
-
-                const repoName = prompt('Enter repository name:', (p.name || 'my-project').toLowerCase().replace(/\s+/g, '-'));
-                if (!repoName) return;
-
-                this.showToast('Scanning secrets & pushing to GitHub...', 'info');
+                let isConnected = false;
+                let ghUsername = '';
                 try {
-                    const ghRes = await API.syncGitHub(projectId, token, repoName, true);
-                    banner.className = 'glass-card mb-6 alert-box alert-success';
+                    const statusRes = await API.getIntegrationsStatus();
+                    isConnected = statusRes.github && statusRes.github.connected;
+                    ghUsername = statusRes.github && statusRes.github.username;
+                } catch {
+                    const currentUser = API.getUser();
+                    isConnected = currentUser && currentUser.github_connected;
+                    ghUsername = currentUser && currentUser.github_username;
+                }
+
+                if (!isConnected) {
+                    banner.className = 'glass-card mb-6 alert-box alert-warning';
                     banner.innerHTML = `
-                        <strong>GitHub Sync Complete:</strong> Code pushed to remote repository.<br>
-                        URL: <a href="${ghRes.repo_url}" target="_blank" class="text-primary-300 font-bold">${ghRes.repo_url}</a>
+                        <strong>GitHub OAuth Not Connected:</strong><br>
+                        To securely push code to private or public GitHub repositories, please connect your GitHub account via OAuth.
+                        <div class="mt-3">
+                            <button class="btn btn-primary btn-sm" onclick="window.location.hash='#/integrations'">
+                                <span>🐙 Connect GitHub in Integrations Dashboard &rarr;</span>
+                            </button>
+                        </div>
                     `;
                     banner.classList.remove('hidden');
-                    this.showToast('GitHub repo created and code pushed!', 'success');
-                } catch (err) {
-                    this.showToast('GitHub error: ' + err.message, 'error');
+                    this.showToast('Please connect GitHub via OAuth in Integrations.', 'warning');
+                    return;
                 }
+
+                const repoDefault = (p.github_repo_name || p.name || 'my-project').toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/-+/g, '-');
+                banner.className = 'glass-card mb-6';
+                banner.innerHTML = `
+                    <h4>🐙 Publish to GitHub (@${this.escapeHtml(ghUsername || 'user')})</h4>
+                    <p class="text-sm text-muted mt-1">Authenticated via OAuth. Source code will be scanned for secrets prior to push.</p>
+                    <div class="mt-3 d-flex gap-3 items-center flex-wrap">
+                        <div style="flex: 1; min-width: 200px;">
+                            <label class="text-xs text-muted">Repository Name</label>
+                            <input type="text" id="gh-sync-reponame" class="form-input" value="${this.escapeHtml(repoDefault)}" style="width: 100%; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-medium); background: rgba(15, 23, 42, 0.6); color: white;">
+                        </div>
+                        <div style="padding-top: 18px;">
+                            <label class="text-sm d-flex items-center gap-2">
+                                <input type="checkbox" id="gh-sync-private" checked> Private Repository
+                            </label>
+                        </div>
+                        <div style="padding-top: 18px;">
+                            <button class="btn btn-primary btn-sm" id="btn-gh-confirm-push">🚀 Scan Secrets & Push Code</button>
+                        </div>
+                    </div>
+                    <div id="gh-push-progress" class="hidden mt-3 text-sm text-muted"></div>
+                `;
+                banner.classList.remove('hidden');
+
+                document.getElementById('btn-gh-confirm-push')?.addEventListener('click', async () => {
+                    const repoNameInput = document.getElementById('gh-sync-reponame').value.trim() || repoDefault;
+                    const isPrivate = document.getElementById('gh-sync-private').checked;
+                    const progEl = document.getElementById('gh-push-progress');
+                    progEl.className = 'mt-3 text-sm text-info';
+                    progEl.textContent = 'Scanning project files for secrets & preparing git push...';
+                    progEl.classList.remove('hidden');
+
+                    try {
+                        const ghRes = await API.syncGitHub(projectId, null, repoNameInput, isPrivate);
+                        if (ghRes.approval_required) {
+                            banner.className = 'glass-card mb-6 alert-box alert-warning';
+                            banner.innerHTML = `
+                                <strong>Human Approval Required:</strong><br>
+                                ${this.escapeHtml(ghRes.message || 'Authorization needed before pushing to remote repository.')}
+                                <div class="mt-3">
+                                    <button class="btn btn-primary btn-sm" id="btn-approve-inline-gh">✓ Authorize Push to GitHub</button>
+                                </div>
+                            `;
+                            document.getElementById('btn-approve-inline-gh')?.addEventListener('click', async () => {
+                                await API.respondApproval(ghRes.approval.id, 'approved', 'Authorized GitHub push');
+                                this.showToast('Approved! Executing git push...', 'info');
+                                const followUp = await API.syncGitHub(projectId, null, repoNameInput, isPrivate);
+                                if (followUp.success) {
+                                    banner.className = 'glass-card mb-6 alert-box alert-success';
+                                    banner.innerHTML = `
+                                        <strong>GitHub Sync Complete:</strong> Code pushed to remote repository.<br>
+                                        URL: <a href="${followUp.repo_url}" target="_blank" class="text-primary-300 font-bold">${followUp.repo_url}</a>
+                                    `;
+                                    this.showToast('Code pushed to GitHub successfully!', 'success');
+                                }
+                            });
+                            return;
+                        }
+
+                        if (ghRes.success) {
+                            banner.className = 'glass-card mb-6 alert-box alert-success';
+                            banner.innerHTML = `
+                                <strong>GitHub Sync Complete:</strong> Code verified & pushed to remote repository.<br>
+                                URL: <a href="${ghRes.repo_url}" target="_blank" class="text-primary-300 font-bold">${ghRes.repo_url}</a>
+                            `;
+                            this.showToast('GitHub repository created & code pushed!', 'success');
+                        } else {
+                            throw new Error(ghRes.error || 'Failed to push to GitHub');
+                        }
+                    } catch (err) {
+                        banner.className = 'glass-card mb-6 alert-box alert-danger';
+                        banner.innerHTML = `<strong>GitHub Error:</strong> ${this.escapeHtml(err.message)}`;
+                        this.showToast('GitHub error: ' + err.message, 'error');
+                    }
+                });
             });
 
             document.getElementById('btn-cloud-deploy').addEventListener('click', async () => {
-                const provider = prompt('Deploy to which cloud provider? (vercel or render)', 'vercel');
-                if (!provider) return;
+                banner.className = 'glass-card mb-6';
+                banner.innerHTML = `
+                    <h4>☁️ Cloud Infrastructure Deployment</h4>
+                    <p class="text-sm text-muted mt-1">Deploy application to cloud provider. Production manifests and live health checks included.</p>
+                    <div class="mt-3 d-flex gap-3 items-center flex-wrap">
+                        <div style="min-width: 220px;">
+                            <label class="text-xs text-muted">Cloud Provider Target</label>
+                            <select id="cloud-deploy-provider" class="form-select" style="width: 100%; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-medium); background: rgba(15, 23, 42, 0.6); color: white;">
+                                <option value="vercel" selected>Vercel (Serverless Edge + Static Frontend - Free Tier $0)</option>
+                                <option value="render">Render (FastAPI Web Service - Free Tier $0)</option>
+                            </select>
+                        </div>
+                        <div style="padding-top: 18px;">
+                            <button class="btn btn-primary btn-sm" id="btn-cloud-confirm-deploy">🚀 Generate Manifests & Deploy</button>
+                        </div>
+                    </div>
+                    <div id="cloud-deploy-progress" class="hidden mt-3 text-sm text-muted"></div>
+                `;
+                banner.classList.remove('hidden');
 
-                this.showToast(`Generating ${provider.toUpperCase()} manifests...`, 'info');
-                try {
-                    const deployRes = await API.deployCloud(projectId, provider);
-                    banner.className = 'glass-card mb-6 alert-box alert-success';
-                    banner.innerHTML = `
-                        <strong>Cloud Manifests Configured:</strong> ${deployRes.message}<br>
-                        Manifest files created: <code>${(deployRes.manifests_generated || []).join(', ')}</code>
-                    `;
-                    banner.classList.remove('hidden');
-                    this.showToast('Cloud deployment manifests generated!', 'success');
-                } catch (err) {
-                    this.showToast('Deployment error: ' + err.message, 'error');
-                }
+                document.getElementById('btn-cloud-confirm-deploy')?.addEventListener('click', async () => {
+                    const provider = document.getElementById('cloud-deploy-provider').value;
+                    const progEl = document.getElementById('cloud-deploy-progress');
+                    progEl.className = 'mt-3 text-sm text-info';
+                    progEl.textContent = `Generating ${provider.toUpperCase()} manifests and executing deployment...`;
+                    progEl.classList.remove('hidden');
+
+                    try {
+                        const deployRes = await API.deployCloud(projectId, provider);
+                        if (deployRes.approval_required) {
+                            banner.className = 'glass-card mb-6 alert-box alert-warning';
+                            banner.innerHTML = `
+                                <strong>Human Approval Required (${provider.toUpperCase()} Deployment):</strong><br>
+                                ${this.escapeHtml(deployRes.message || 'Authorization needed before cloud deployment.')}
+                                <div class="mt-3">
+                                    <button class="btn btn-primary btn-sm" id="btn-approve-inline-deploy">✓ Authorize Cloud Deployment</button>
+                                </div>
+                            `;
+                            document.getElementById('btn-approve-inline-deploy')?.addEventListener('click', async () => {
+                                await API.respondApproval(deployRes.approval.id, 'approved', `Authorized ${provider} deployment`);
+                                this.showToast(`Approved! Deploying to ${provider.toUpperCase()}...`, 'info');
+                                const followUp = await API.deployCloud(projectId, provider);
+                                banner.className = 'glass-card mb-6 alert-box alert-success';
+                                banner.innerHTML = `
+                                    <strong>Deployment Completed:</strong> ${followUp.message || 'Deployed'}<br>
+                                    ${followUp.deploy_url ? `URL: <a href="${followUp.deploy_url}" target="_blank" class="text-primary-300 font-bold">${followUp.deploy_url}</a>` : ''}
+                                    ${followUp.manifests_generated ? `<br>Manifests: <code>${followUp.manifests_generated.join(', ')}</code>` : ''}
+                                `;
+                                this.showToast(`Deployment to ${provider.toUpperCase()} executed!`, 'success');
+                            });
+                            return;
+                        }
+
+                        banner.className = 'glass-card mb-6 alert-box alert-success';
+                        banner.innerHTML = `
+                            <strong>Deployment Completed:</strong> ${deployRes.message || 'Deployed'}<br>
+                            ${deployRes.deploy_url ? `Live URL: <a href="${deployRes.deploy_url}" target="_blank" class="text-primary-300 font-bold">${deployRes.deploy_url}</a><br>` : ''}
+                            ${deployRes.manifests_generated ? `Manifests configured: <code>${deployRes.manifests_generated.join(', ')}</code>` : ''}
+                        `;
+                        this.showToast(`Deployment executed!`, 'success');
+                    } catch (err) {
+                        banner.className = 'glass-card mb-6 alert-box alert-danger';
+                        banner.innerHTML = `<strong>Deployment Error:</strong> ${this.escapeHtml(err.message)}`;
+                        this.showToast('Deployment error: ' + err.message, 'error');
+                    }
+                });
             });
 
         } catch (err) {
