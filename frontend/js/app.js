@@ -14,12 +14,57 @@ const App = {
     async init() {
         await Auth.init();
         this.initTheme();
+        this.initVoice();
         this.setupRouting();
         this.setupGlobalEvents();
         this.checkApprovalsBadge();
 
         // Refresh badge every 30s
         setInterval(() => this.checkApprovalsBadge(), 30000);
+    },
+
+    initVoice() {
+        this.voiceEnabled = localStorage.getItem('problempilot_voice') !== 'false';
+        this.updateVoiceButton();
+
+        const toggleBtn = document.getElementById('voice-toggle-btn');
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', () => {
+                this.voiceEnabled = !this.voiceEnabled;
+                localStorage.setItem('problempilot_voice', this.voiceEnabled);
+                this.updateVoiceButton();
+                if (this.voiceEnabled) {
+                    this.speak('Voice narration enabled.');
+                } else {
+                    if ('speechSynthesis' in window) {
+                        window.speechSynthesis.cancel();
+                    }
+                }
+            });
+        }
+    },
+
+    updateVoiceButton() {
+        const icon = document.getElementById('voice-btn-icon');
+        const text = document.getElementById('voice-btn-text');
+        if (icon && text) {
+            icon.textContent = this.voiceEnabled ? '🔊' : '🔇';
+            text.textContent = this.voiceEnabled ? 'Voice On' : 'Voice Off';
+        }
+    },
+
+    speak(text) {
+        if (!this.voiceEnabled || !text || !('speechSynthesis' in window)) return;
+        try {
+            window.speechSynthesis.cancel();
+            const cleanText = text.replace(/[*_#`\[\]()<>]/g, ' ').substring(0, 300);
+            const utterance = new SpeechSynthesisUtterance(cleanText);
+            utterance.rate = 1.0;
+            utterance.pitch = 1.0;
+            window.speechSynthesis.speak(utterance);
+        } catch (e) {
+            console.debug('Speech synthesis error:', e);
+        }
     },
 
     initTheme() {
@@ -346,6 +391,9 @@ const App = {
         }
 
         this.currentOpportunities = opportunities;
+        if (opportunities.length > 0) {
+            this.speak(`Discovered ${opportunities.length} validated opportunities. Top recommendation: ${opportunities[0].title}`);
+        }
 
         container.innerHTML = `
             <div class="section-title-wrap mt-8 mb-4">
