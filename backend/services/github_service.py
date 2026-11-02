@@ -246,11 +246,14 @@ class GitHubService:
 
             # 6. Verify commit on remote repository
             clean_full_name = clean_url.replace(".git", "").split("github.com/")[-1]
-            verification = await GitHubService.verify_remote_commit(
-                token=token,
-                full_name=clean_full_name,
-                branch="main",
-            )
+            try:
+                verification = await GitHubService.verify_remote_commit(
+                    token=token,
+                    full_name=clean_full_name,
+                    branch="main",
+                )
+            except Exception as ve:
+                verification = {"verified": False, "error": redact_credentials(str(ve), token)}
 
             return {
                 "success": True,
@@ -260,6 +263,12 @@ class GitHubService:
                 "latest_commit_sha": verification.get("sha"),
                 "commit_details": verification,
                 "message": "Successfully pushed project to GitHub and verified remote repository state.",
+            }
+        except Exception as e:
+            safe_err = redact_credentials(str(e), token)
+            return {
+                "success": False,
+                "error": f"Git operation failed: {safe_err}",
             }
         finally:
             # Secure cleanup: clear in-memory temporary credentials and guarantee clean remote URL
