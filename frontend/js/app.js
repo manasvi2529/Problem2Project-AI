@@ -118,6 +118,11 @@ const App = {
         const route = path || 'home';
         this.currentRoute = route;
 
+        // Ensure unauthenticated users are prompted to sign in
+        if (!API.getToken()) {
+            Auth.showModal('login');
+        }
+
         // Update nav active
         document.querySelectorAll('.sidebar-menu .nav-item').forEach(n => {
             const page = n.dataset.page;

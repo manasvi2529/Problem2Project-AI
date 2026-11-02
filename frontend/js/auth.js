@@ -58,6 +58,9 @@ const Auth = {
 
         // Listen for session expiration
         window.addEventListener('auth:expired', () => {
+            this.currentUser = null;
+            const userInfo = document.getElementById('user-info');
+            if (userInfo) userInfo.classList.add('hidden');
             this.showModal('login');
             this.showError('Session expired. Please log in again.');
         });
@@ -116,18 +119,12 @@ const Auth = {
     async checkExistingSession() {
         const token = API.getToken();
         if (!token) {
-            // Auto login default developer account for zero-friction access
-            try {
-                const res = await API.login("developer@problempilot.ai", "ProblemPilot123!");
-                this.currentUser = res.user;
-                this.updateUserUI(res.user);
-                this.hideModal();
-                window.dispatchEvent(new CustomEvent('auth:ready', { detail: res.user }));
-                return;
-            } catch (err) {
-                this.showModal('login');
-                return;
-            }
+            this.currentUser = null;
+            API.setUser(null);
+            const userInfo = document.getElementById('user-info');
+            if (userInfo) userInfo.classList.add('hidden');
+            this.showModal('login');
+            return null;
         }
 
         try {
@@ -137,17 +134,17 @@ const Auth = {
             this.updateUserUI(user);
             this.hideModal();
             window.dispatchEvent(new CustomEvent('auth:ready', { detail: user }));
+            return user;
         } catch (err) {
-            console.warn('Existing session invalid:', err);
-            try {
-                const res = await API.login("developer@problempilot.ai", "ProblemPilot123!");
-                this.currentUser = res.user;
-                this.updateUserUI(res.user);
-                this.hideModal();
-                window.dispatchEvent(new CustomEvent('auth:ready', { detail: res.user }));
-            } catch {
-                this.showModal('login');
-            }
+            console.warn('Existing session invalid or expired:', err.message || err);
+            API.setToken(null);
+            API.setUser(null);
+            this.currentUser = null;
+            const userInfo = document.getElementById('user-info');
+            if (userInfo) userInfo.classList.add('hidden');
+            this.showModal('login');
+            this.showError('Session expired. Please log in again.');
+            return null;
         }
     },
 
@@ -168,6 +165,8 @@ const Auth = {
             this.currentUser = res.user;
             this.updateUserUI(res.user);
             this.hideModal();
+            const pwdInput = document.getElementById('login-password');
+            if (pwdInput) pwdInput.value = '';
             if (window.App) {
                 App.showToast(`Welcome back, ${res.user.name || res.user.username}!`, 'success');
                 App.refreshCurrentPage();
@@ -198,6 +197,8 @@ const Auth = {
             this.currentUser = res.user;
             this.updateUserUI(res.user);
             this.hideModal();
+            const regPwdInput = document.getElementById('reg-password');
+            if (regPwdInput) regPwdInput.value = '';
             if (window.App) {
                 App.showToast('Account created successfully!', 'success');
                 App.refreshCurrentPage();
@@ -215,9 +216,10 @@ const Auth = {
         this.currentUser = null;
         const userInfo = document.getElementById('user-info');
         if (userInfo) userInfo.classList.add('hidden');
+        this.clearError();
         this.showModal('login');
         if (window.App) {
-            App.showToast('Signed out', 'info');
+            App.showToast('Signed out successfully', 'info');
         }
     },
 
