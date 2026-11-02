@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 import pytest
 from httpx import AsyncClient, ASGITransport
 
+from sqlalchemy import select
 from backend.main import app
 from backend.database import init_db, AsyncSessionLocal
 from backend.models.user import User
@@ -139,15 +140,21 @@ async def run_security_modes_workspace_tests():
         assert proj_res.status_code in (200, 201)
         project_id = proj_res.json()["project"]["id"]
 
-        # Generate blueprint
+        # Generate blueprint (creates pending approve_architecture approval)
         bp_res = await client.post(f"/api/orchestrator/projects/{project_id}/blueprint", headers=auth_headers)
         assert bp_res.status_code == 200
         assert "blueprint" in bp_res.json()
+        bp_approval_id = bp_res.json().get("approval_id")
+        if bp_approval_id:
+            await client.post(
+                f"/api/approvals/{bp_approval_id}/decide",
+                json={"decision": "approved", "reason": "Approve architecture"},
+                headers=auth_headers,
+            )
 
         # Build workspace
         build_res = await client.post(
             f"/api/orchestrator/projects/{project_id}/build",
-            json={"force_build": True},
             headers=auth_headers,
         )
         assert build_res.status_code == 200
@@ -181,10 +188,17 @@ async def run_security_modes_workspace_tests():
         assert "authorization missing" in gh_missing_res.json()["detail"].lower()
         logger.info("✓ GitHub sync without credentials safely rejected")
 
-        # With mock token, verify approval is required before pushing
+        # Connect user's GitHub OAuth account securely
+        async with AsyncSessionLocal() as session:
+            db_u = (await session.execute(select(User).where(User.id == user_id))).scalar_one()
+            db_u.set_github_token("gho_mocktoken1234567890abcdef1234567890")
+            db_u.github_username = "sarah-connor-audit"
+            await session.commit()
+
+        # With connected account, verify approval is required before pushing
         gh_appr_res = await client.post(
             f"/api/orchestrator/projects/{project_id}/github",
-            json={"token": "ghp_mocktoken1234567890abcdef1234567890", "repository_name": "audit-pipe", "private": True},
+            json={"repository_name": "audit-pipe", "private": True},
             headers=auth_headers,
         )
         assert gh_appr_res.status_code == 200

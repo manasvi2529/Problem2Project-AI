@@ -99,10 +99,7 @@ class Settings(BaseSettings):
 
     @property
     def github_configured(self) -> bool:
-        return bool(
-            (self.GITHUB_CLIENT_ID and self.GITHUB_CLIENT_SECRET)
-            or self.GITHUB_PERSONAL_ACCESS_TOKEN
-        )
+        return bool(self.GITHUB_CLIENT_ID and self.GITHUB_CLIENT_SECRET)
 
     @property
     def vercel_configured(self) -> bool:

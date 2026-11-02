@@ -377,12 +377,14 @@ class AgentOrchestrator:
         if not project:
             raise ValueError("Project not found")
 
-        auth_token = token or user.get_github_token() or settings.GITHUB_PERSONAL_ACCESS_TOKEN
+        # Publishing must use the authenticated user's own connected GitHub OAuth credential.
+        # Global GITHUB_PERSONAL_ACCESS_TOKEN fallback is strictly removed.
+        auth_token = user.get_github_token()
         if not auth_token:
             return {
                 "success": False,
                 "configured": False,
-                "error": "GitHub authorization missing. Please connect your GitHub account via OAuth in Cloud & GitHub settings or provide a token.",
+                "error": "GitHub authorization missing: Your GitHub account is not connected. Please connect your GitHub account via OAuth in Integrations to publish projects.",
             }
 
         workspace_dir = self.workspace_builder.get_workspace_dir(project.id, project.name)
@@ -470,6 +472,8 @@ class AgentOrchestrator:
             private=private,
         )
         if not repo_res.get("success"):
+            if "error" in repo_res:
+                repo_res["error"] = self.github_service.redact_credentials(repo_res["error"], auth_token)
             return repo_res
 
         # 4. Commit and push
@@ -479,6 +483,8 @@ class AgentOrchestrator:
             token=auth_token,
         )
         if not push_res.get("success"):
+            if "error" in push_res:
+                push_res["error"] = self.github_service.redact_credentials(push_res["error"], auth_token)
             return push_res
 
         project.github_repo_url = repo_res.get("repo_url")

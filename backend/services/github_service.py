@@ -3,7 +3,9 @@ ProblemPilot AI — GitHub Integration Service
 Secure account verification, automated secret scanning, repository creation,
 git commits and push operations with remote verification.
 """
+import os
 import re
+import base64
 import logging
 import asyncio
 import subprocess
@@ -14,6 +16,26 @@ import httpx
 from backend.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def redact_credentials(text: Any, token: Optional[str] = None) -> str:
+    """
+    Scrub tokens and credential patterns from text, logs, and error messages.
+    Ensures credentials never appear in user-facing responses or server logs.
+    """
+    if not text:
+        return ""
+    redacted = str(text)
+    if token and str(token) in redacted:
+        redacted = redacted.replace(str(token), "[REDACTED_TOKEN]")
+    # Redact common credential patterns (PAT, OAuth, fine-grained PAT)
+    redacted = re.sub(r"gh[pousr]_[A-Za-z0-9_]{20,}", "[REDACTED_TOKEN]", redacted)
+    redacted = re.sub(r"github_pat_[A-Za-z0-9_]{20,}", "[REDACTED_TOKEN]", redacted)
+    # Redact embedded URL credentials https://user:pass@github.com -> https://[REDACTED_AUTH]@github.com
+    redacted = re.sub(r"(https?://)[^:@\s]+:[^@\s]+@", r"\1[REDACTED_AUTH]@", redacted)
+    # Redact authorization header values
+    redacted = re.sub(r"(AUTHORIZATION:\s*(?:bearer|basic)\s+)[^\s'\"]+", r"\1[REDACTED]", redacted, flags=re.IGNORECASE)
+    return redacted
 
 
 # Regex patterns for secret detection
@@ -62,6 +84,10 @@ class GitHubService:
         return findings
 
     @staticmethod
+    def redact_credentials(text: Any, token: Optional[str] = None) -> str:
+        return redact_credentials(text, token)
+
+    @staticmethod
     async def verify_github_token(token: str) -> Dict[str, Any]:
         """
         Verify that a GitHub Personal Access Token or OAuth token is valid and active.
@@ -85,7 +111,7 @@ class GitHubService:
                 }
             return {
                 "valid": False,
-                "error": f"GitHub API rejected token (HTTP {resp.status_code}): {resp.text}",
+                "error": redact_credentials(f"GitHub API rejected token (HTTP {resp.status_code}): {resp.text}", token),
             }
 
     @staticmethod
@@ -97,6 +123,7 @@ class GitHubService:
     ) -> Dict[str, Any]:
         """
         Create a new remote repository on GitHub under the authenticated user's account.
+        Preserves remote private repository creation.
         """
         headers = {
             "Authorization": f"Bearer {token}",
@@ -134,7 +161,7 @@ class GitHubService:
             else:
                 return {
                     "success": False,
-                    "error": f"Failed to create repo (HTTP {resp.status_code}): {resp.text}",
+                    "error": redact_credentials(f"Failed to create repo (HTTP {resp.status_code}): {resp.text}", token),
                 }
 
     @staticmethod
@@ -146,23 +173,38 @@ class GitHubService:
         force: bool = False,
     ) -> Dict[str, Any]:
         """
-        Initialize git, stage files, commit, configure remote with token, push,
-        and sanitize git remote URL immediately to avoid persisting tokens on disk.
+        Initialize git, stage files, commit, configure clean remote without tokens,
+        and securely push using temporary subprocess HTTP authentication headers.
+        Never embeds tokens in git remote URLs, command-line arguments, or .git/config.
         """
-        # Embed token safely for authenticated push: https://oauth2:TOKEN@github.com/...
-        auth_url = repo_clone_url
-        if "https://github.com/" in repo_clone_url:
-            auth_url = repo_clone_url.replace("https://github.com/", f"https://oauth2:{token}@github.com/")
+        # Ensure clean remote URL without any credentials embedded
+        clean_url = re.sub(r"https?://[^@]+@", "https://", repo_clone_url)
 
-        async def run_git(args: List[str]) -> tuple[int, str, str]:
+        async def run_git(args: List[str], env: Optional[Dict[str, str]] = None) -> tuple[int, str, str]:
             proc = await asyncio.create_subprocess_exec(
                 "git", *args,
                 cwd=str(workspace_dir),
+                env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await proc.communicate()
             return proc.returncode, stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")
+
+        # Prepare secure temporary HTTP extraHeader authorization for git subprocess
+        auth_bytes = f"x-access-token:{token}".encode("utf-8")
+        basic_auth = base64.b64encode(auth_bytes).decode("ascii")
+
+        push_env = os.environ.copy()
+        push_env.update({
+            "GIT_TERMINAL_PROMPT": "0",
+            "GCM_INTERACTIVE": "never",
+            "GIT_CONFIG_COUNT": "2",
+            "GIT_CONFIG_KEY_0": "http.extraHeader",
+            "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic_auth}",
+            "GIT_CONFIG_KEY_1": "credential.helper",
+            "GIT_CONFIG_VALUE_1": "",
+        })
 
         try:
             # 1. Initialize git if needed
@@ -174,33 +216,36 @@ class GitHubService:
             # 2. Stage all files
             await run_git(["add", "."])
 
-            # 3. Commit
-            await run_git(["commit", "-m", commit_message])
+            # 3. Commit only if there are changes to commit
+            status_code, status_out, _ = await run_git(["status", "--porcelain"])
+            if status_out.strip():
+                await run_git(["commit", "-m", commit_message])
 
-            # 4. Remote setup with temporary auth URL
-            await run_git(["remote", "remove", "origin"])
-            await run_git(["remote", "add", "origin", auth_url])
+            # 4. Configure remote with clean URL (never containing credentials)
+            code, out, _ = await run_git(["remote", "get-url", "origin"])
+            if code == 0:
+                await run_git(["remote", "set-url", "origin", clean_url])
+            else:
+                await run_git(["remote", "add", "origin", clean_url])
 
-            # 5. Push safely without blind force-pushing
+            # 5. Push using temporary subprocess environment authentication
             push_args = ["push", "-u", "origin", "main"]
             if force:
                 push_args.append("--force")
 
-            code, out, err = await run_git(push_args)
+            code, out, err = await run_git(push_args, env=push_env)
             if code != 0:
-                # If rejected due to remote history, provide descriptive conflict detection
+                safe_err = redact_credentials(err, token)
                 if "fetch first" in err or "non-fast-forward" in err or "conflict" in err:
-                    safe_err = err.replace(token, "[REDACTED_TOKEN]")
                     return {
                         "success": False,
                         "conflict": True,
                         "error": f"Push rejected: Remote repository already has conflicting commits. Use a fresh repository or merge history: {safe_err}",
                     }
-                safe_err = err.replace(token, "[REDACTED_TOKEN]")
                 return {"success": False, "error": f"Git push failed: {safe_err}"}
 
-            # 6. Verify commit on remote
-            clean_full_name = repo_clone_url.replace(".git", "").split("github.com/")[-1]
+            # 6. Verify commit on remote repository
+            clean_full_name = clean_url.replace(".git", "").split("github.com/")[-1]
             verification = await GitHubService.verify_remote_commit(
                 token=token,
                 full_name=clean_full_name,
@@ -217,9 +262,10 @@ class GitHubService:
                 "message": "Successfully pushed project to GitHub and verified remote repository state.",
             }
         finally:
-            # Critical Security Step: Sanitize remote URL on disk so token is never stored in .git/config
+            # Secure cleanup: clear in-memory temporary credentials and guarantee clean remote URL
+            push_env.clear()
             try:
-                await run_git(["remote", "set-url", "origin", repo_clone_url])
+                await run_git(["remote", "set-url", "origin", clean_url])
             except Exception:
                 pass
 
