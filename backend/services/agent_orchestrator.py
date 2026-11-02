@@ -191,21 +191,42 @@ class AgentOrchestrator:
         if not project:
             raise ValueError("Project not found")
 
-        # In Guided mode: show mentor instructions unless explicit build is authorized
-        if user.operating_mode == "guided" and not force_build:
-            return {
-                "project_id": project.id,
-                "mode": "guided",
-                "mentor_instructions": {
-                    "step_1": "Create index.html using semantic HTML5 and link styles.css.",
-                    "step_2": "Implement FastAPI server in server.py exposing /api/v1/health.",
-                    "step_3": "Add automated test cases in test_suite.py verifying status codes.",
-                },
-                "message": "Guided Mode active: Follow mentor instructions to code modules yourself or request assistance.",
-            }
+        # In Guided mode: show mentor instructions unless explicit build approval is verified.
+        # Guided mode must never silently generate files, and client flags cannot bypass approval.
+        if user.operating_mode == "guided":
+            action_params = {"project_id": project.id, "project_name": project.name}
+            approved = await self.approval_engine.verify_approved(
+                db=db,
+                user_id=user.id,
+                action_type="generate_workspace",
+                project_id=project.id,
+                action_params=action_params,
+            )
+            if not approved:
+                return {
+                    "project_id": project.id,
+                    "mode": "guided",
+                    "approval_required": True,
+                    "mentor_instructions": {
+                        "step_1": "Create index.html using semantic HTML5 and link styles.css.",
+                        "step_2": "Implement FastAPI server in server.py exposing /api/v1/health.",
+                        "step_3": "Add automated test cases in test_suite.py verifying status codes.",
+                    },
+                    "message": "Guided Mode active: Follow mentor instructions to code modules yourself or request assistance.",
+                }
 
-        # Check approval in Hybrid mode (Autonomous prepares code automatically)
-        if user.operating_mode == "hybrid" and not force_build:
+            # Consume the approval atomically
+            await self.approval_engine.consume_approval(
+                db=db,
+                user_id=user.id,
+                action_type="generate_workspace",
+                project_id=project.id,
+                action_params=action_params,
+            )
+
+        # Check approval in Hybrid mode (Autonomous prepares code automatically).
+        # Client-provided flags (such as force_build) must never bypass protected approval checks.
+        elif user.operating_mode == "hybrid":
             action_params = {"project_id": project.id, "project_name": project.name}
             approved = await self.approval_engine.verify_approved(
                 db=db,
@@ -223,16 +244,29 @@ class AgentOrchestrator:
                     project_id=project.id,
                 )
                 if not arch_approved:
-                    approval = await self.approval_engine.request_approval(
-                        db=db,
-                        user_id=user.id,
-                        action_type="generate_workspace",
-                        project_id=project.id,
-                        title=f"Generate Code Workspace: {project.name}",
-                        description=f"Generate full-stack source code files into isolated project sandbox.",
-                        proposed_action={"project_name": project.name, "tech_stack": project.tech_stack},
-                        action_params=action_params,
+                    # Look for existing pending approval first to avoid duplicates
+                    pending_res = await db.execute(
+                        select(Approval).where(
+                            Approval.owner_id == user.id,
+                            Approval.project_id == project.id,
+                            Approval.action_type == "generate_workspace",
+                            Approval.decision == "pending",
+                        )
                     )
+                    existing_pending = pending_res.scalars().first()
+                    if existing_pending and not existing_pending.is_expired:
+                        approval = existing_pending
+                    else:
+                        approval = await self.approval_engine.request_approval(
+                            db=db,
+                            user_id=user.id,
+                            action_type="generate_workspace",
+                            project_id=project.id,
+                            title=f"Generate Code Workspace: {project.name}",
+                            description=f"Generate full-stack source code files into isolated project sandbox.",
+                            proposed_action={"project_name": project.name, "tech_stack": project.tech_stack},
+                            action_params=action_params,
+                        )
                     return {
                         "project_id": project.id,
                         "approval_required": True,
@@ -280,6 +314,7 @@ class AgentOrchestrator:
     ) -> Dict[str, Any]:
         """
         Stage 7: Execute Automated Tests in Sandbox.
+        Testing never generates source files by directly calling the workspace builder.
         """
         res = await db.execute(select(Project).where(Project.id == project_id, Project.owner_id == user.id))
         project = res.scalar_one_or_none()
@@ -287,16 +322,25 @@ class AgentOrchestrator:
             raise ValueError("Project not found")
 
         workspace_dir = self.workspace_builder.get_workspace_dir(project.id, project.name)
-
-        # If files have not been generated yet, automatically build the workspace codebase first
         server_file = workspace_dir / "server.py"
-        if not server_file.exists():
-            await self.workspace_builder.build_and_persist_workspace(
-                db=db,
-                project_id=project.id,
-                project_name=project.name,
-                blueprint=project.blueprint or {},
-            )
+
+        # If files have not been generated yet, never generate files here.
+        # Return a clear response that code generation is required first.
+        if not workspace_dir.exists() or not server_file.exists():
+            return {
+                "project_id": project.id,
+                "code_generation_required": True,
+                "message": "Workspace source code has not been generated yet. Code generation is required before running tests.",
+                "test_results": {
+                    "passed": False,
+                    "status": "not_generated",
+                    "total": 0,
+                    "passed_count": 0,
+                    "failed_count": 0,
+                    "output": "Workspace source code has not been generated yet. Please generate the codebase before running verification tests.",
+                    "message": "Workspace source code has not been generated yet. Code generation is required before running tests.",
+                },
+            }
 
         test_results = await self.workspace_builder.run_workspace_tests(workspace_dir)
 
