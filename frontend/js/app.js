@@ -235,9 +235,11 @@ const App = {
                     
                     <div class="prompt-chips-row">
                         <span class="text-xs text-muted font-semibold">QUICK PROMPTS:</span>
-                        <button type="button" class="chip-btn" data-prompt="Find a real-world problem in India that I can solve with Python and SQL. I want a unique, placement-worthy project that could eventually become a startup. Research everything, compare existing solutions, and help me build it.">🇮🇳 Python + SQL India Startup</button>
-                        <button type="button" class="chip-btn" data-prompt="Identify slow Docker CI/CD build bottlenecks and microservice failover challenges that I can solve with Python FastAPI.">⚡ DevOps CI/CD Bottlenecks</button>
-                        <button type="button" class="chip-btn" data-prompt="Discover high-friction customer invoice reconciliation and manual spreadsheet errors in fintech SaaS.">💼 Fintech Invoice Reconciliation</button>
+                        <button type="button" class="chip-btn" data-prompt="Find a real-world problem in India that I can solve with Python and SQL. I want a unique, placement-worthy project that could eventually become a startup. Research everything, compare existing solutions, and help me build it.">🇮🇳 India FinTech & SQL Startup</button>
+                        <button type="button" class="chip-btn" data-prompt="Identify slow Docker CI/CD build bottlenecks, memory leaks, and microservice failover crashes that I can solve with Python and FastAPI.">⚡ DevOps & CI/CD Sentinel</button>
+                        <button type="button" class="chip-btn" data-prompt="Discover LLM tool-calling hallucinations, prompt schema drift, and token latency spikes in AI engineering.">🤖 AI & LLMOps Guardrails</button>
+                        <button type="button" class="chip-btn" data-prompt="Find hospital outpatient no-shows, patient queue triage bottlenecks, and HIPAA compliance record drift.">🏥 Healthcare Patient Queue Triage</button>
+                        <button type="button" class="chip-btn" id="btn-roll-prompt" style="background: rgba(99, 102, 241, 0.2); border: 1px solid rgba(99, 102, 241, 0.5); color: #c7d2fe; font-weight: 600;">🎲 Roll New Idea Prompt</button>
                     </div>
 
                     <div class="prompt-submit-row">
@@ -315,12 +317,38 @@ const App = {
             </div>
         `;
 
+        const RANDOM_PROMPTS = [
+            "Find a real-world problem in India that I can solve with Python and SQL. I want a unique, placement-worthy project that could eventually become a startup. Research everything, compare existing solutions, and help me build it.",
+            "Identify slow Docker CI/CD build bottlenecks, memory leaks, and microservice failover crashes that I can solve with Python and FastAPI.",
+            "Discover high-frequency payment webhook failures, multi-gateway reconciliation drift, and invoice anomalies in fintech SaaS.",
+            "Find hospital outpatient no-shows, patient queue triage bottlenecks, and HIPAA compliance record drift.",
+            "Discover LLM structured output drift, tool-calling hallucinations, and vector cache latency spikes in AI engineering.",
+            "Identify zero-day API credential stuffing, unencrypted token leaks, and microservice permission drift in cybersecurity.",
+            "Find real-time flash sale inventory locks, cart abandonment friction, and logistics fulfillment drop-offs in e-commerce.",
+            "Discover relational database connection pool exhaustion, unindexed query lock contention, and schema drift in data engineering."
+        ];
+
         // Wire chips
         container.querySelectorAll('.chip-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const input = document.getElementById('hero-prompt-input');
-                if (input) input.value = btn.dataset.prompt;
-            });
+            if (btn.id === 'btn-roll-prompt') {
+                btn.addEventListener('click', () => {
+                    const input = document.getElementById('hero-prompt-input');
+                    if (input) {
+                        const current = input.value.trim();
+                        const pool = RANDOM_PROMPTS.filter(p => p !== current);
+                        const picked = pool[Math.floor(Math.random() * pool.length)];
+                        input.value = picked;
+                        input.style.borderColor = 'var(--accent-primary, #6366f1)';
+                        setTimeout(() => { input.style.borderColor = ''; }, 600);
+                        this.showToast('Rolled fresh problem discovery prompt!', 'info');
+                    }
+                });
+            } else {
+                btn.addEventListener('click', () => {
+                    const input = document.getElementById('hero-prompt-input');
+                    if (input && btn.dataset.prompt) input.value = btn.dataset.prompt;
+                });
+            }
         });
 
         // Wire form submit
@@ -522,9 +550,12 @@ const App = {
                         </select>
                     </div>
 
-                    <div>
+                    <div class="d-flex gap-2">
                         <button class="btn btn-primary" id="btn-fetch-more-ideas" style="padding: 9px 18px; font-weight: 600; box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);">
                             <span>✨ Fetch More Ideas</span>
+                        </button>
+                        <button class="btn btn-secondary" id="btn-roll-fresh-ideas" style="padding: 9px 16px;">
+                            <span>🔄 Roll Fresh Ideas</span>
                         </button>
                     </div>
                 </div>
@@ -559,6 +590,56 @@ const App = {
         };
 
         wireSelectButtons();
+
+        // Wire "Roll Fresh Ideas" button to replace cards with fresh randomized pool
+        const rollFreshBtn = document.getElementById('btn-roll-fresh-ideas');
+        if (rollFreshBtn) {
+            rollFreshBtn.addEventListener('click', async () => {
+                const domain = document.getElementById('pref-domain-select')?.value || 'all';
+                const stackStr = document.getElementById('pref-stack-input')?.value.trim() || '';
+                const goal = document.getElementById('pref-goal-select')?.value || 'startup';
+                const difficulty = document.getElementById('pref-diff-select')?.value || 'intermediate';
+                const skills = stackStr ? stackStr.split(',').map(s => s.trim()).filter(Boolean) : [];
+                const excludeTitles = (this.currentOpportunities || []).map(o => o.title);
+
+                rollFreshBtn.disabled = true;
+                rollFreshBtn.innerHTML = '<span>⏳ Rolling...</span>';
+                try {
+                    this.showToast('Rolling fresh real-world opportunities...', 'info');
+                    const res = await API.fetchMoreIdeas({
+                        domain,
+                        skills,
+                        goal,
+                        difficulty,
+                        offset: 0,
+                        limit: 4,
+                        exclude_titles: excludeTitles,
+                    });
+                    const newOpps = res.opportunities || [];
+                    if (newOpps.length > 0) {
+                        this.currentOpportunities = newOpps;
+                        const grid = document.getElementById('opps-cards-grid');
+                        if (grid) {
+                            grid.innerHTML = renderCardsHtml(this.currentOpportunities);
+                            wireSelectButtons();
+                        }
+                        const countEl = document.getElementById('opps-count-num');
+                        if (countEl) countEl.textContent = this.currentOpportunities.length;
+                        const badgeEl = document.getElementById('opps-total-badge');
+                        if (badgeEl) badgeEl.textContent = `${this.currentOpportunities.length} Ideas Available`;
+                        this.showToast(`Rolled ${newOpps.length} fresh distinct opportunities!`, 'success');
+                        this.speak(`Loaded fresh opportunities. Top recommendation: ${newOpps[0].title}`);
+                    } else {
+                        this.showToast('All ideas in this filter loaded. Showing all domains...', 'info');
+                    }
+                } catch (e) {
+                    this.showToast('Error rolling opportunities: ' + e.message, 'error');
+                } finally {
+                    rollFreshBtn.disabled = false;
+                    rollFreshBtn.innerHTML = '<span>🔄 Roll Fresh Ideas</span>';
+                }
+            });
+        }
 
         // Wire "Fetch More Ideas" dynamic preference query
         const fetchMoreBtn = document.getElementById('btn-fetch-more-ideas');
@@ -649,7 +730,10 @@ const App = {
                     <h1 class="page-title">Live Research & Evidence Explorer</h1>
                     <p class="page-subtitle">Inspect gathered community discussions, platform scrapers, and factual citations.</p>
                 </div>
-                <button class="btn btn-secondary" onclick="window.location.hash='#/'">&larr; New Prompt Studio</button>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-secondary" id="btn-header-roll-opps">🔄 Roll Fresh Opportunities</button>
+                    <button class="btn btn-secondary" onclick="window.location.hash='#/'">&larr; New Prompt Studio</button>
+                </div>
             </div>
 
             <div id="research-content-container">
@@ -782,6 +866,34 @@ const App = {
             }
 
             this.renderOpportunitiesGrid(target, problems, sessionId);
+
+            // Wire header roll button
+            const headerRollBtn = document.getElementById('btn-header-roll-opps');
+            if (headerRollBtn) {
+                headerRollBtn.addEventListener('click', async () => {
+                    headerRollBtn.disabled = true;
+                    headerRollBtn.innerHTML = '<span>⏳ Rolling fresh ideas...</span>';
+                    try {
+                        const excludeTitles = (this.currentOpportunities || []).map(o => o.title);
+                        const freshRes = await API.fetchMoreIdeas({
+                            domain: 'all',
+                            limit: 4,
+                            offset: 0,
+                            exclude_titles: excludeTitles,
+                        });
+                        const freshOpps = freshRes.opportunities || [];
+                        if (freshOpps.length > 0) {
+                            this.renderOpportunitiesGrid(target, freshOpps, sessionId);
+                            this.showToast('Rolled fresh real-world opportunities!', 'success');
+                        }
+                    } catch (e) {
+                        this.showToast('Error rolling opportunities: ' + e.message, 'error');
+                    } finally {
+                        headerRollBtn.disabled = false;
+                        headerRollBtn.innerHTML = '<span>🔄 Roll Fresh Opportunities</span>';
+                    }
+                });
+            }
         } catch (err) {
             target.innerHTML = `
                 <div class="glass-card text-center p-8">
