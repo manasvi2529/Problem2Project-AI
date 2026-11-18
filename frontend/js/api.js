@@ -254,6 +254,13 @@ const API = {
         });
     },
 
+    async fetchMoreIdeas(params = {}) {
+        return await this.request('/api/orchestrator/ideas/more', {
+            method: 'POST',
+            body: JSON.stringify(params),
+        });
+    },
+
     async generateProjectBlueprint(projectId) {
         return await this.request(`/api/orchestrator/projects/${encodeURIComponent(projectId)}/blueprint`, {
             method: 'POST',
@@ -312,6 +319,13 @@ const API = {
 
     async authorizeGitHub() {
         return await this.request('/api/integrations/github/authorize');
+    },
+
+    async connectGitHubToken(token) {
+        return await this.request('/api/integrations/github/token', {
+            method: 'POST',
+            body: JSON.stringify({ token }),
+        });
     },
 
     async testGitHubConnection() {

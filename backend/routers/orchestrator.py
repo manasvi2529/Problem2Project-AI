@@ -29,6 +29,17 @@ teacher = AITeacher()
 class PromptJourneyRequest(BaseModel):
     prompt: str = Field(..., min_length=3, max_length=1000)
 
+class FetchMoreIdeasRequest(BaseModel):
+    prompt: Optional[str] = ""
+    domain: Optional[str] = "all"
+    skills: Optional[List[str]] = None
+    goal: Optional[str] = "startup"
+    difficulty: Optional[str] = "intermediate"
+    offset: Optional[int] = 0
+    limit: Optional[int] = 6
+    exclude_titles: Optional[List[str]] = None
+    session_id: Optional[str] = None
+
 class BuildWorkspaceRequest(BaseModel):
     force_build: Optional[bool] = False
 
@@ -70,6 +81,35 @@ async def start_prompt_journey(
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Research journey failed: {str(e)}")
+
+
+@router.post("/ideas/more")
+async def fetch_more_ideas(
+    body: FetchMoreIdeasRequest,
+    user: User = Depends(get_user_from_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Fetch additional, diverse real-world opportunities matching user preferences
+    (domain, tech stack skills, startup/placement goal, difficulty) while excluding
+    any previously seen ideas to ensure non-repetitive discovery.
+    """
+    try:
+        return await orchestrator.fetch_more_ideas(
+            db=db,
+            user=user,
+            prompt=body.prompt or "",
+            domain=body.domain or "all",
+            skills=body.skills,
+            goal=body.goal or "startup",
+            difficulty=body.difficulty or "intermediate",
+            offset=body.offset or 0,
+            limit=body.limit or 6,
+            exclude_titles=body.exclude_titles or [],
+            session_id=body.session_id,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch ideas: {str(e)}")
 
 
 @router.post("/projects/{project_id}/blueprint")

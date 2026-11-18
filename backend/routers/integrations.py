@@ -19,9 +19,14 @@ from backend.config import settings
 from backend.services.github_service import GitHubService
 from backend.services.cloud_deployer import CloudDeployer
 from backend.security import generate_oauth_state, verify_oauth_state
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
+
+
+class ConnectGitHubTokenRequest(BaseModel):
+    token: str = Field(..., min_length=10, max_length=255)
 
 
 @router.get("/status")
@@ -192,6 +197,47 @@ async def test_github_connection(
             "error": verification.get("error", "GitHub API rejected current token."),
             "message": "GitHub connection has expired or been revoked. Please reconnect.",
         }
+
+
+@router.post("/github/token")
+async def connect_github_token(
+    body: ConnectGitHubTokenRequest,
+    user: User = Depends(get_user_from_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Directly connect a user's GitHub account via Personal Access Token (PAT) or OAuth token.
+    Validates token with GitHub API, verifies 'repo' permissions, and securely stores encrypted at rest.
+    """
+    clean_token = body.token.strip()
+    verification = await GitHubService.verify_github_token(clean_token)
+    if not verification.get("valid"):
+        raise HTTPException(
+            status_code=400,
+            detail=verification.get("error", "Invalid GitHub token. Please verify your token has 'repo' scope."),
+        )
+
+    from datetime import datetime, timezone
+    user.set_github_token(clean_token)
+    user.github_username = verification.get("username", "")
+    user.github_connected_at = datetime.now(timezone.utc)
+    user.github_oauth_state = None
+
+    log = AuditLog(
+        user_id=user.id,
+        action="github_token_connected",
+        category="integrations",
+        description=f"GitHub account connected via token for @{user.github_username}",
+    )
+    db.add(log)
+    await db.commit()
+
+    return {
+        "success": True,
+        "connected": True,
+        "username": user.github_username,
+        "message": f"Successfully connected GitHub account @{user.github_username}",
+    }
 
 
 @router.delete("/github")

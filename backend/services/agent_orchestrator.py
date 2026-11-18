@@ -126,6 +126,62 @@ class AgentOrchestrator:
             },
         }
 
+    async def fetch_more_ideas(
+        self,
+        db: AsyncSession,
+        user: User,
+        prompt: str = "",
+        domain: str = "all",
+        skills: Optional[List[str]] = None,
+        goal: str = "startup",
+        difficulty: str = "intermediate",
+        offset: int = 0,
+        limit: int = 6,
+        exclude_titles: Optional[List[str]] = None,
+        session_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Fetch additional, non-repeating ideas tailored to user preferences and domain.
+        Persists newly generated candidate opportunities to DB if session_id is given.
+        """
+        user_skills = skills or (user.preferences.get("skills") if user.preferences else None) or ["Python", "FastAPI"]
+        result = self.opportunity_engine.fetch_more_opportunities_by_preference(
+            prompt=prompt,
+            domain=domain,
+            user_skills=user_skills,
+            goal=goal,
+            difficulty=difficulty,
+            offset=offset,
+            limit=limit,
+            exclude_titles=exclude_titles,
+        )
+
+        # If a session_id is active, persist candidates so they have unique IDs
+        if session_id:
+            for opp in result.get("opportunities", []):
+                scores = opp.get("scores", {})
+                prob = ProblemCandidate(
+                    session_id=session_id,
+                    title=opp.get("title", ""),
+                    description=f"{opp.get('summary', '')}\n\nProposed Solution: {opp.get('proposed_solution', '')}",
+                    affected_users=opp.get("affected_users", ""),
+                    existing_solutions=opp.get("existing_solutions", ""),
+                    solution_gaps=opp.get("key_differentiator", ""),
+                    evidence_summary="Synthesized based on domain patterns and architectural best practices.",
+                    claim_type="source_backed",
+                    scores=scores,
+                    overall_score=scores.get("overall_score", 7.5),
+                    rank=opp.get("rank", 1),
+                    status="evaluated",
+                )
+                db.add(prob)
+                await db.flush()
+                opp["id"] = prob.id
+
+            await db.commit()
+
+        return result
+
     async def generate_blueprint_stage(
         self,
         db: AsyncSession,

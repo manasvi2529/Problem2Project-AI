@@ -396,92 +396,227 @@ const App = {
         }
 
         this.currentOpportunities = opportunities;
-        if (opportunities.length > 0) {
+        this.currentSessionId = sessionId || this.currentSessionId || null;
+        if (opportunities.length > 0 && !this._hasSpokenOpps) {
             this.speak(`Discovered ${opportunities.length} validated opportunities. Top recommendation: ${opportunities[0].title}`);
+            this._hasSpokenOpps = true;
         }
 
-        container.innerHTML = `
-            <div class="section-title-wrap mt-8 mb-4">
-                <h2>Recommended Real-World Opportunities (${opportunities.length})</h2>
-                <p>Transparent multi-factor evaluations comparing Problem Evidence, Placement Value, and Startup Viability:</p>
-            </div>
+        const renderCardsHtml = (opps) => {
+            return opps.map((opp, idx) => {
+                const scores = opp.scores || {};
+                const a = scores.assessment_a_evidence || {};
+                const b = scores.assessment_b_developer_fit || {};
+                const c = scores.assessment_c_business_potential || {};
+                const overall = scores.overall_score || opp.overall_score || 8.0;
+                const domainTag = opp.domain || (opp.metadata && opp.metadata.domain) || 'General';
 
-            <div class="opps-grid">
-                ${opportunities.map((opp, idx) => {
-                    const scores = opp.scores || {};
-                    const a = scores.assessment_a_evidence || {};
-                    const b = scores.assessment_b_developer_fit || {};
-                    const c = scores.assessment_c_business_potential || {};
-                    const overall = scores.overall_score || opp.overall_score || 8.0;
-
-                    return `
-                        <div class="glass-card opp-eval-card">
-                            <div class="opp-card-header">
+                return `
+                    <div class="glass-card opp-eval-card" data-card-idx="${idx}" style="animation: fadeIn 0.3s ease;">
+                        <div class="opp-card-header">
+                            <div class="d-flex items-center gap-2">
                                 <span class="badge badge-purple">RANK #${idx + 1}</span>
-                                <div class="score-badge">
-                                    <span class="score-num">${overall}</span>
-                                    <span class="score-label">/ 10</span>
-                                </div>
+                                <span class="badge badge-blue">${this.escapeHtml(domainTag.toUpperCase())}</span>
                             </div>
-
-                            <h3 class="opp-title">${this.escapeHtml(opp.title)}</h3>
-                            <p class="opp-summary">${this.escapeHtml(opp.description || opp.summary || '')}</p>
-
-                            <!-- 3 SEPARATE ASSESSMENTS -->
-                            <div class="eval-pillars-grid">
-                                <div class="eval-pillar">
-                                    <div class="pillar-header">
-                                        <span class="pillar-tag tag-a">A. EVIDENCE</span>
-                                        <strong>${a.score || 8.2}/10</strong>
-                                    </div>
-                                    <span class="pillar-verdict">${a.verdict || 'Strongly Evidenced'}</span>
-                                    <p class="pillar-note">${this.escapeHtml(a.factors?.severity?.rationale || 'Real user friction observed in discussions.')}</p>
-                                </div>
-
-                                <div class="eval-pillar">
-                                    <div class="pillar-header">
-                                        <span class="pillar-tag tag-b">B. CAREER FIT</span>
-                                        <strong>${b.score || 8.5}/10</strong>
-                                    </div>
-                                    <span class="pillar-verdict">${b.verdict || 'High Placement Value'}</span>
-                                    <p class="pillar-note">${this.escapeHtml(b.factors?.career_relevance?.rationale || 'Demonstrates asynchronous production skills in interviews.')}</p>
-                                </div>
-
-                                <div class="eval-pillar">
-                                    <div class="pillar-header">
-                                        <span class="pillar-tag tag-c">C. STARTUP MOAT</span>
-                                        <strong>${c.score || 7.8}/10</strong>
-                                    </div>
-                                    <span class="pillar-verdict">${c.verdict || 'Commercial Potential'}</span>
-                                    <p class="pillar-note">${this.escapeHtml(c.factors?.differentiation?.rationale || 'High willingness to pay for eliminating operational toil.')}</p>
-                                </div>
-                            </div>
-
-                            <div class="opp-actions-row">
-                                <button class="btn btn-primary btn-full btn-select-opp" data-idx="${idx}">
-                                    <span>Select & Generate Project Blueprint &rarr;</span>
-                                </button>
+                            <div class="score-badge">
+                                <span class="score-num">${overall}</span>
+                                <span class="score-label">/ 10</span>
                             </div>
                         </div>
-                    `;
-                }).join('')}
+
+                        <h3 class="opp-title">${this.escapeHtml(opp.title)}</h3>
+                        <p class="opp-summary">${this.escapeHtml(opp.description || opp.summary || '')}</p>
+
+                        <!-- 3 SEPARATE ASSESSMENTS -->
+                        <div class="eval-pillars-grid">
+                            <div class="eval-pillar">
+                                <div class="pillar-header">
+                                    <span class="pillar-tag tag-a">A. EVIDENCE</span>
+                                    <strong>${a.score || 8.2}/10</strong>
+                                </div>
+                                <span class="pillar-verdict">${a.verdict || 'Strongly Evidenced'}</span>
+                                <p class="pillar-note">${this.escapeHtml(a.factors?.severity?.rationale || 'Real user friction observed in discussions.')}</p>
+                            </div>
+
+                            <div class="eval-pillar">
+                                <div class="pillar-header">
+                                    <span class="pillar-tag tag-b">B. CAREER FIT</span>
+                                    <strong>${b.score || 8.5}/10</strong>
+                                </div>
+                                <span class="pillar-verdict">${b.verdict || 'High Placement Value'}</span>
+                                <p class="pillar-note">${this.escapeHtml(b.factors?.career_relevance?.rationale || 'Demonstrates production architecture in technical interviews.')}</p>
+                            </div>
+
+                            <div class="eval-pillar">
+                                <div class="pillar-header">
+                                    <span class="pillar-tag tag-c">C. STARTUP MOAT</span>
+                                    <strong>${c.score || 7.8}/10</strong>
+                                </div>
+                                <span class="pillar-verdict">${c.verdict || 'Commercial Potential'}</span>
+                                <p class="pillar-note">${this.escapeHtml(c.factors?.differentiation?.rationale || 'High willingness to pay for eliminating operational toil.')}</p>
+                            </div>
+                        </div>
+
+                        <div class="opp-actions-row">
+                            <button class="btn btn-primary btn-full btn-select-opp" data-idx="${idx}">
+                                <span>Select & Generate Project Blueprint &rarr;</span>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        };
+
+        container.innerHTML = `
+            <!-- PREFERENCE & DISCOVERY CONTROL PANEL -->
+            <div class="glass-card mb-6 p-5" style="border-left: 4px solid var(--accent-primary, #6366f1); background: rgba(30, 41, 59, 0.4);">
+                <div class="d-flex justify-between items-center flex-wrap gap-3 mb-4">
+                    <div>
+                        <h3 style="margin: 0; font-size: 1.25rem; display: flex; align-items: center; gap: 8px;">
+                            <span>🎯 Tailor Ideas to Your Preferences</span>
+                        </h3>
+                        <p class="text-sm text-muted mt-1" style="margin: 4px 0 0;">
+                            Continuous discovery engine: customize your preferences below to discover fresh, unrepeated project ideas across engineering disciplines.
+                        </p>
+                    </div>
+                    <div class="badge badge-purple" id="opps-total-badge">
+                        ${opportunities.length} Ideas Available
+                    </div>
+                </div>
+
+                <div class="d-flex gap-4 flex-wrap items-end" style="row-gap: 14px;">
+                    <div style="flex: 1; min-width: 170px;">
+                        <label class="text-xs text-muted font-bold" style="text-transform: uppercase; letter-spacing: 0.5px;">Computer Science Domain</label>
+                        <select id="pref-domain-select" class="form-select mt-1" style="width: 100%; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-medium); background: rgba(15, 23, 42, 0.7); color: white;">
+                            <option value="all">🌐 All Engineering Domains</option>
+                            <option value="saas">☁️ SaaS & Web Architecture</option>
+                            <option value="ai">🤖 AI / LLMOps & Agents</option>
+                            <option value="devops">🚀 DevOps & Cloud Reliability</option>
+                            <option value="security">🛡️ Cybersecurity & DevSecOps</option>
+                            <option value="data">📊 Data Science & Analytics</option>
+                            <option value="fintech">💳 Fintech & Reconciliation</option>
+                            <option value="healthcare">🏥 Healthtech & Clinical</option>
+                            <option value="ecommerce">🛒 High-Scale E-Commerce</option>
+                        </select>
+                    </div>
+
+                    <div style="flex: 1; min-width: 160px;">
+                        <label class="text-xs text-muted font-bold" style="text-transform: uppercase; letter-spacing: 0.5px;">Preferred Tech Stack</label>
+                        <input type="text" id="pref-stack-input" placeholder="e.g. Python, FastAPI, Docker, React" class="form-input mt-1" style="width: 100%; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-medium); background: rgba(15, 23, 42, 0.7); color: white;">
+                    </div>
+
+                    <div style="min-width: 150px;">
+                        <label class="text-xs text-muted font-bold" style="text-transform: uppercase; letter-spacing: 0.5px;">Target Goal</label>
+                        <select id="pref-goal-select" class="form-select mt-1" style="width: 100%; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-medium); background: rgba(15, 23, 42, 0.7); color: white;">
+                            <option value="startup">🚀 Startup MVP (Commercial Moat)</option>
+                            <option value="portfolio">💼 Developer Portfolio (Hiring & Placement)</option>
+                        </select>
+                    </div>
+
+                    <div style="min-width: 130px;">
+                        <label class="text-xs text-muted font-bold" style="text-transform: uppercase; letter-spacing: 0.5px;">Difficulty</label>
+                        <select id="pref-diff-select" class="form-select mt-1" style="width: 100%; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-medium); background: rgba(15, 23, 42, 0.7); color: white;">
+                            <option value="intermediate">Intermediate</option>
+                            <option value="advanced">Advanced</option>
+                            <option value="beginner">Beginner</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <button class="btn btn-primary" id="btn-fetch-more-ideas" style="padding: 9px 18px; font-weight: 600; box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);">
+                            <span>✨ Fetch More Ideas</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section-title-wrap mt-6 mb-4 d-flex justify-between items-center">
+                <div>
+                    <h2 id="opps-header-title">Recommended Real-World Opportunities (<span id="opps-count-num">${opportunities.length}</span>)</h2>
+                    <p class="text-muted text-sm">Transparent evaluations comparing Problem Evidence, Placement Value, and Startup Viability:</p>
+                </div>
+            </div>
+
+            <div class="opps-grid" id="opps-cards-grid">
+                ${renderCardsHtml(opportunities)}
             </div>
         `;
 
-        // Wire event listeners cleanly without string escaping bugs
-        container.querySelectorAll('.btn-select-opp').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                const idx = parseInt(e.currentTarget.dataset.idx);
-                const opp = (this.currentOpportunities || [])[idx];
-                if (!opp) return;
+        const wireSelectButtons = () => {
+            container.querySelectorAll('.btn-select-opp').forEach(btn => {
+                btn.onclick = async (e) => {
+                    const idx = parseInt(e.currentTarget.dataset.idx);
+                    const opp = (this.currentOpportunities || [])[idx];
+                    if (!opp) return;
 
-                const btnEl = e.currentTarget;
-                btnEl.disabled = true;
-                btnEl.innerHTML = `<span>⏳ Initializing Workspace & Blueprint...</span>`;
+                    const btnEl = e.currentTarget;
+                    btnEl.disabled = true;
+                    btnEl.innerHTML = `<span>⏳ Initializing Workspace & Blueprint...</span>`;
 
-                await this.selectAndBuildOpportunity(opp.title, opp.description || opp.summary || '', opp.id || '');
+                    await this.selectAndBuildOpportunity(opp.title, opp.description || opp.summary || '', opp.id || '');
+                };
             });
-        });
+        };
+
+        wireSelectButtons();
+
+        // Wire "Fetch More Ideas" dynamic preference query
+        const fetchMoreBtn = document.getElementById('btn-fetch-more-ideas');
+        if (fetchMoreBtn) {
+            fetchMoreBtn.addEventListener('click', async () => {
+                const domain = document.getElementById('pref-domain-select').value;
+                const stackStr = document.getElementById('pref-stack-input').value.trim();
+                const goal = document.getElementById('pref-goal-select').value;
+                const difficulty = document.getElementById('pref-diff-select').value;
+                const skills = stackStr ? stackStr.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+                const excludeTitles = (this.currentOpportunities || []).map(o => o.title);
+
+                fetchMoreBtn.disabled = true;
+                fetchMoreBtn.innerHTML = `<span>⏳ Searching Live Opportunities...</span>`;
+
+                try {
+                    this.showToast('Researching new ideas matching your preferences...', 'info');
+                    const res = await API.fetchMoreIdeas({
+                        domain,
+                        skills,
+                        goal,
+                        difficulty,
+                        offset: (this.currentOpportunities || []).length,
+                        limit: 4,
+                        exclude_titles: excludeTitles,
+                        session_id: this.currentSessionId || sessionId,
+                    });
+
+                    const newOpps = res.opportunities || [];
+                    if (newOpps.length === 0) {
+                        this.showToast('All matching ideas currently loaded for this filter! Try changing domain or tech stack.', 'info');
+                    } else {
+                        // Append newly fetched non-repeating ideas
+                        this.currentOpportunities = (this.currentOpportunities || []).concat(newOpps);
+
+                        const grid = document.getElementById('opps-cards-grid');
+                        if (grid) {
+                            grid.innerHTML = renderCardsHtml(this.currentOpportunities);
+                            wireSelectButtons();
+                        }
+
+                        const countEl = document.getElementById('opps-count-num');
+                        if (countEl) countEl.textContent = this.currentOpportunities.length;
+                        const badgeEl = document.getElementById('opps-total-badge');
+                        if (badgeEl) badgeEl.textContent = `${this.currentOpportunities.length} Ideas Available`;
+
+                        this.showToast(`✨ Loaded ${newOpps.length} new unique ideas! Total: ${this.currentOpportunities.length}`, 'success');
+                        this.speak(`Loaded ${newOpps.length} more opportunities. Check out ${newOpps[0].title}`);
+                    }
+                } catch (err) {
+                    this.showToast('Failed to fetch more ideas: ' + err.message, 'error');
+                } finally {
+                    fetchMoreBtn.disabled = false;
+                    fetchMoreBtn.innerHTML = `<span>✨ Fetch More Ideas</span>`;
+                }
+            });
+        }
     },
 
     async selectAndBuildOpportunity(title, description, problemCandidateId) {
@@ -506,7 +641,7 @@ const App = {
         }
     },
 
-    // ── Pages: Research ─────────────────────────────────────────────────────
+        // ── Pages: Research ─────────────────────────────────────────────────────
     async renderResearch(container, sessionId) {
         container.innerHTML = `
             <div class="page-header">
@@ -1212,16 +1347,54 @@ const App = {
                 if (!isConnected) {
                     banner.className = 'glass-card mb-6 alert-box alert-warning';
                     banner.innerHTML = `
-                        <strong>GitHub OAuth Not Connected:</strong><br>
-                        To securely push code to private or public GitHub repositories, please connect your GitHub account via OAuth.
-                        <div class="mt-3">
-                            <button class="btn btn-primary btn-sm" onclick="window.location.hash='#/integrations'">
-                                <span>🐙 Connect GitHub in Integrations Dashboard &rarr;</span>
+                        <h4>🐙 Connect GitHub to Publish Your Codebase</h4>
+                        <p class="text-sm mt-1">To securely push this verified project and its documentation to a private or public repository, choose a connection method:</p>
+                        
+                        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid var(--border-medium); border-radius: 8px; padding: 14px; margin-top: 12px;">
+                            <h5 style="margin: 0 0 6px; color: #a5b4fc;">⚡ Option 1: Instant Personal Access Token (Recommended)</h5>
+                            <p class="text-xs text-muted" style="margin: 0 0 8px;">Create a classic or fine-grained token with <code>repo</code> scope and connect instantly:</p>
+                            <div class="d-flex gap-2">
+                                <input type="password" id="input-quick-gh-pat" placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" class="form-input" style="flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-medium); background: rgba(0,0,0,0.4); color: white;">
+                                <button class="btn btn-primary btn-sm" id="btn-quick-connect-gh-pat">Connect PAT & Continue &rarr;</button>
+                            </div>
+                            <div class="mt-2 text-xs">
+                                <a href="https://github.com/settings/tokens/new?scopes=repo&description=Problem2ProjectAI" target="_blank" class="text-primary-300" style="text-decoration: underline;">
+                                    🔗 Generate a GitHub Token with 'repo' scope &rarr;
+                                </a>
+                            </div>
+                        </div>
+
+                        <div class="mt-3 text-sm text-muted d-flex items-center gap-2">
+                            <span>Option 2: </span>
+                            <button class="btn btn-secondary btn-sm" onclick="window.location.hash='#/integrations'">
+                                <span>Connect via OAuth in Integrations &rarr;</span>
                             </button>
                         </div>
                     `;
                     banner.classList.remove('hidden');
-                    this.showToast('Please connect GitHub via OAuth in Integrations.', 'warning');
+
+                    document.getElementById('btn-quick-connect-gh-pat')?.addEventListener('click', async () => {
+                        const token = document.getElementById('input-quick-gh-pat')?.value.trim();
+                        if (!token) {
+                            this.showToast('Please enter your GitHub Personal Access Token', 'warning');
+                            return;
+                        }
+                        const connectBtn = document.getElementById('btn-quick-connect-gh-pat');
+                        connectBtn.disabled = true;
+                        connectBtn.innerHTML = '<span>⏳ Verifying Token...</span>';
+                        try {
+                            const res = await API.connectGitHubToken(token);
+                            this.showToast(`GitHub account @${res.username} connected successfully!`, 'success');
+                            // Re-trigger push flow immediately with connected account
+                            document.getElementById('btn-github-sync').click();
+                        } catch (err) {
+                            this.showToast('GitHub token verification failed: ' + err.message, 'error');
+                            connectBtn.disabled = false;
+                            connectBtn.innerHTML = '<span>Connect PAT & Continue &rarr;</span>';
+                        }
+                    });
+
+                    this.showToast('Please connect your GitHub account using a token or OAuth.', 'info');
                     return;
                 }
 
@@ -1229,7 +1402,7 @@ const App = {
                 banner.className = 'glass-card mb-6';
                 banner.innerHTML = `
                     <h4>🐙 Publish to GitHub (@${this.escapeHtml(ghUsername || 'user')})</h4>
-                    <p class="text-sm text-muted mt-1">Authenticated via OAuth. Source code will be scanned for secrets prior to push.</p>
+                    <p class="text-sm text-muted mt-1">Authenticated securely. Source code will be scanned for secrets prior to push.</p>
                     <div class="mt-3 d-flex gap-3 items-center flex-wrap">
                         <div style="flex: 1; min-width: 200px;">
                             <label class="text-xs text-muted">Repository Name</label>
@@ -1669,13 +1842,23 @@ const App = {
                         </div>
                     ` : `
                         <div style="background: rgba(0, 0, 0, 0.2); border: 1px solid var(--border-color); padding: 16px; border-radius: 8px; margin-bottom: 16px;">
-                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
                                 <div>
                                     <div style="font-weight: 500; margin-bottom: 4px;">No GitHub Account Linked</div>
-                                    <div class="text-muted text-sm">${gh.oauth_enabled ? 'OAuth credentials configured in backend. Ready to connect.' : 'Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in .env to enable OAuth.'}</div>
+                                    <div class="text-muted text-sm">${gh.oauth_enabled ? 'OAuth credentials configured in backend. Ready to authorize.' : 'Connect directly with a Personal Access Token (PAT) or configure OAuth.'}</div>
                                 </div>
                                 <div>
-                                    <button class="btn btn-primary" id="btn-connect-github" ${gh.oauth_enabled ? '' : 'disabled'}>Connect GitHub Account</button>
+                                    <button class="btn btn-secondary btn-sm" id="btn-connect-github" ${gh.oauth_enabled ? '' : 'disabled'}>Authorize via OAuth</button>
+                                </div>
+                            </div>
+                            <div style="border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 8px;">
+                                <label class="text-xs text-muted font-bold">⚡ Or Connect Instantly with Personal Access Token (repo scope):</label>
+                                <div style="display: flex; gap: 8px; margin-top: 6px;">
+                                    <input type="password" id="input-integ-gh-token" placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" class="form-input" style="flex: 1; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-color); background: rgba(0,0,0,0.4); color: white;">
+                                    <button class="btn btn-primary btn-sm" id="btn-integ-save-gh-token">Connect Token</button>
+                                </div>
+                                <div class="text-xs text-muted mt-2">
+                                    <a href="https://github.com/settings/tokens/new?scopes=repo&description=Problem2ProjectAI" target="_blank" class="text-primary-300">Generate token on GitHub &rarr;</a>
                                 </div>
                             </div>
                         </div>
@@ -1863,6 +2046,28 @@ GITHUB_REDIRECT_URI=${callbackUrl}</pre>
                         }
                     } catch (e) {
                         vercelTestResult.innerHTML = `<div style="background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); padding: 10px; border-radius: 6px; color: #ef4444; font-size: 0.85rem;">✗ Verification error: ${e.message}</div>`;
+                    }
+                });
+            }
+
+            const integTokenBtn = document.getElementById('btn-integ-save-gh-token');
+            if (integTokenBtn) {
+                integTokenBtn.addEventListener('click', async () => {
+                    const token = document.getElementById('input-integ-gh-token')?.value.trim();
+                    if (!token) {
+                        alert('Please enter your GitHub Personal Access Token.');
+                        return;
+                    }
+                    integTokenBtn.disabled = true;
+                    integTokenBtn.textContent = 'Verifying...';
+                    try {
+                        const res = await API.connectGitHubToken(token);
+                        this.showToast(`GitHub account @${res.username} connected!`, 'success');
+                        this.renderIntegrations(container);
+                    } catch (e) {
+                        alert('GitHub token verification failed: ' + e.message);
+                        integTokenBtn.disabled = false;
+                        integTokenBtn.textContent = 'Connect Token';
                     }
                 });
             }
